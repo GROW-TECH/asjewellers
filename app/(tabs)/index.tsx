@@ -27,11 +27,17 @@ interface ReferralStats {
   total_commission: number;
 }
 
+interface GoldRate {
+  rate_per_gram: number;
+  rate_date: string;
+}
+
 export default function HomeScreen() {
   const { profile } = useAuth();
   const [wallet, setWallet] = useState<WalletData | null>({ saving_balance: 0, referral_balance: 0, total_balance: 0, gold_balance_mg: 0 });
   const [subscription, setSubscription] = useState<SubscriptionData | null>(null);
   const [referralStats, setReferralStats] = useState<ReferralStats>({ total_referrals: 0, total_commission: 0 });
+  const [goldRate, setGoldRate] = useState<GoldRate | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
@@ -86,6 +92,17 @@ export default function HomeScreen() {
       total_referrals: referrals?.length || 0,
       total_commission: totalCommission,
     });
+
+    const { data: goldRateData } = await supabase
+      .from('gold_rates')
+      .select('rate_per_gram, rate_date')
+      .order('rate_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (goldRateData) {
+      setGoldRate(goldRateData);
+    }
   };
 
   const onRefresh = async () => {
@@ -102,8 +119,16 @@ export default function HomeScreen() {
       }
     >
       <View style={styles.header}>
-        <Text style={styles.greeting}>Welcome back,</Text>
-        <Text style={styles.name}>{profile?.full_name || 'Demo User'}</Text>
+        <View>
+          <Text style={styles.greeting}>Welcome back,</Text>
+          <Text style={styles.name}>{profile?.full_name || 'Demo User'}</Text>
+        </View>
+        {goldRate && (
+          <View style={styles.goldRateCard}>
+            <Text style={styles.goldRateLabel}>Today's Gold Rate</Text>
+            <Text style={styles.goldRateValue}>₹{goldRate.rate_per_gram}/g</Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.walletCard}>
@@ -221,6 +246,9 @@ const styles = StyleSheet.create({
   header: {
     padding: 24,
     paddingTop: 60,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   greeting: {
     fontSize: 16,
@@ -231,6 +259,24 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#fff',
     marginTop: 4,
+  },
+  goldRateCard: {
+    backgroundColor: '#2a2a2a',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FFD700',
+    alignItems: 'center',
+  },
+  goldRateLabel: {
+    fontSize: 10,
+    color: '#999',
+    marginBottom: 4,
+  },
+  goldRateValue: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FFD700',
   },
   walletCard: {
     backgroundColor: '#2a2a2a',
