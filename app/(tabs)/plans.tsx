@@ -323,8 +323,9 @@ export default function PlansScreen() {
 
   const renderPlanCard = (plan: Plan) => {
     const totalToPay = plan.monthly_amount * plan.payment_months;
-    const bonusAmount = (totalToPay * plan.bonus_percentage) / 100;
-    const finalAmount = totalToPay + bonusAmount;
+    const bonusAmountRs = 4500;
+    const goldRate = 6500;
+    const bonusGoldGrams = (bonusAmountRs / goldRate).toFixed(3);
 
     return (
       <View key={plan.id} style={styles.planCard}>
@@ -344,7 +345,7 @@ export default function PlansScreen() {
           </View>
           <View style={styles.planDetail}>
             <Gift size={18} color="#999" />
-            <Text style={styles.planDetailText}>{plan.bonus_percentage}% bonus</Text>
+            <Text style={styles.planDetailText}>{bonusGoldGrams}g gold bonus</Text>
           </View>
         </View>
 
@@ -354,12 +355,8 @@ export default function PlansScreen() {
             <Text style={styles.calcValue}>₹{totalToPay.toFixed(2)}</Text>
           </View>
           <View style={styles.calcRow}>
-            <Text style={styles.calcLabel}>Company Bonus</Text>
-            <Text style={[styles.calcValue, styles.bonusText]}>+₹{bonusAmount.toFixed(2)}</Text>
-          </View>
-          <View style={[styles.calcRow, styles.totalRow]}>
-            <Text style={styles.totalLabel}>You Receive</Text>
-            <Text style={styles.totalValue}>₹{finalAmount.toFixed(2)}</Text>
+            <Text style={styles.calcLabel}>Company Bonus (Gold)</Text>
+            <Text style={[styles.calcValue, styles.bonusText]}>{bonusGoldGrams} grams</Text>
           </View>
         </View>
 
