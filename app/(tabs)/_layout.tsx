@@ -1,5 +1,5 @@
 import { Tabs } from 'expo-router';
-import { Wallet, Users, UserCircle, TrendingUp } from 'lucide-react-native';
+import { Wallet, Users, UserCircle, TrendingUp, Receipt } from 'lucide-react-native';
 
 export default function TabLayout() {
   return (
@@ -27,6 +27,13 @@ export default function TabLayout() {
         options={{
           title: 'Plans',
           tabBarIcon: ({ size, color }) => <TrendingUp size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="transactions"
+        options={{
+          title: 'Transactions',
+          tabBarIcon: ({ size, color }) => <Receipt size={size} color={color} />,
         }}
       />
       <Tabs.Screen

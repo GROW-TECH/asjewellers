@@ -156,13 +156,26 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.goldBalanceCard}>
-          <Text style={styles.goldBalanceLabel}>Gold Holdings</Text>
-          <Text style={styles.goldBalanceAmount}>
-            {wallet?.gold_balance_mg?.toFixed(3) || '0.000'} mg
-          </Text>
-          <Text style={styles.goldBalanceSubtext}>
-            ({((wallet?.gold_balance_mg || 0) / 1000).toFixed(3)} grams)
-          </Text>
+          <View style={styles.goldBalanceHeader}>
+            <View>
+              <Text style={styles.goldBalanceLabel}>Gold Holdings</Text>
+              <Text style={styles.goldBalanceAmount}>
+                {((wallet?.gold_balance_mg || 0) / 1000).toFixed(3)} grams
+              </Text>
+              <Text style={styles.goldBalanceSubtext}>
+                ({wallet?.gold_balance_mg?.toFixed(3) || '0.000'} mg)
+              </Text>
+            </View>
+            {goldRate && (
+              <View style={styles.goldValueCard}>
+                <Text style={styles.goldValueLabel}>Current Value</Text>
+                <Text style={styles.goldValueAmount}>
+                  ₹{(((wallet?.gold_balance_mg || 0) / 1000) * parseFloat(goldRate.rate_per_gram.toString())).toFixed(2)}
+                </Text>
+                <Text style={styles.goldValueSubtext}>@ ₹{parseFloat(goldRate.rate_per_gram.toString())}/g</Text>
+              </View>
+            )}
+          </View>
         </View>
       </View>
 
@@ -335,6 +348,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     marginTop: 16,
+  },
+  goldBalanceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
   },
   goldBalanceLabel: {
@@ -343,14 +360,35 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   goldBalanceAmount: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
     color: '#FFD700',
-    marginBottom: 4,
   },
   goldBalanceSubtext: {
     fontSize: 12,
     color: '#666',
+    marginTop: 4,
+  },
+  goldValueCard: {
+    backgroundColor: '#2a2a2a',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'flex-end',
+  },
+  goldValueLabel: {
+    fontSize: 10,
+    color: '#999',
+    marginBottom: 4,
+  },
+  goldValueAmount: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#4ade80',
+  },
+  goldValueSubtext: {
+    fontSize: 10,
+    color: '#666',
+    marginTop: 2,
   },
   card: {
     backgroundColor: '#2a2a2a',

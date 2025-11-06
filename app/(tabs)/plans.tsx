@@ -30,17 +30,36 @@ interface Payment {
   status: string;
 }
 
+interface GoldRate {
+  rate_per_gram: number;
+}
+
 export default function PlansScreen() {
   const { profile } = useAuth();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [goldRate, setGoldRate] = useState<number>(6500);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     loadPlans();
     loadSubscription();
+    loadGoldRate();
   }, []);
+
+  const loadGoldRate = async () => {
+    const { data: goldRateData } = await supabase
+      .from('gold_rates')
+      .select('rate_per_gram')
+      .order('rate_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (goldRateData) {
+      setGoldRate(parseFloat(goldRateData.rate_per_gram.toString()));
+    }
+  };
 
   const loadPlans = async () => {
     const { data } = await supabase
@@ -324,8 +343,8 @@ export default function PlansScreen() {
   const renderPlanCard = (plan: Plan) => {
     const totalToPay = plan.monthly_amount * plan.payment_months;
     const bonusAmountRs = 4500;
-    const goldRate = 6500;
     const bonusGoldGrams = (bonusAmountRs / goldRate).toFixed(3);
+    const goldPerMonth = ((plan.monthly_amount / goldRate) * 1000).toFixed(3);
 
     return (
       <View key={plan.id} style={styles.planCard}>
@@ -334,10 +353,15 @@ export default function PlansScreen() {
           <Text style={styles.planName}>{plan.name}</Text>
         </View>
 
+        <View style={styles.goldRateDisplay}>
+          <Text style={styles.goldRateLabel}>Today's Gold Rate</Text>
+          <Text style={styles.goldRateText}>₹{goldRate}/gram</Text>
+        </View>
+
         <View style={styles.planDetails}>
           <View style={styles.planDetail}>
             <DollarSign size={18} color="#999" />
-            <Text style={styles.planDetailText}>₹{plan.monthly_amount}/month</Text>
+            <Text style={styles.planDetailText}>₹{plan.monthly_amount}/month = {goldPerMonth}mg gold</Text>
           </View>
           <View style={styles.planDetail}>
             <Calendar size={18} color="#999" />
@@ -500,6 +524,23 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#FFD700',
     marginLeft: 12,
+  },
+  goldRateDisplay: {
+    backgroundColor: '#1a1a1a',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  goldRateLabel: {
+    fontSize: 12,
+    color: '#999',
+    marginBottom: 4,
+  },
+  goldRateText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#FFD700',
   },
   planDetails: {
     marginBottom: 20,
