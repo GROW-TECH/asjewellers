@@ -93,14 +93,19 @@ export default function HomeScreen() {
       total_commission: totalCommission,
     });
 
-    const { data: goldRateData } = await supabase
+    const { data: goldRateData, error: goldRateError } = await supabase
       .from('gold_rates')
       .select('rate_per_gram, rate_date')
       .order('rate_date', { ascending: false })
       .limit(1)
       .maybeSingle();
 
+    if (goldRateError) {
+      console.error('Error fetching gold rate:', goldRateError);
+    }
+
     if (goldRateData) {
+      console.log('Gold rate data:', goldRateData);
       setGoldRate(goldRateData);
     }
   };
@@ -126,7 +131,7 @@ export default function HomeScreen() {
         {goldRate && (
           <View style={styles.goldRateCard}>
             <Text style={styles.goldRateLabel}>Today's Gold Rate</Text>
-            <Text style={styles.goldRateValue}>₹{goldRate.rate_per_gram}/g</Text>
+            <Text style={styles.goldRateValue}>₹{parseFloat(goldRate.rate_per_gram.toString())}/g</Text>
           </View>
         )}
       </View>
