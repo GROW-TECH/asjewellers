@@ -9,9 +9,27 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const { signInWithPassword } = useAuth();
 
-  const handleLogin = async () => {
-    router.replace('/(tabs)');
-  };
+// inside Login component
+
+const handleLogin = async () => {
+  if (!phone || phone.length < 6) {
+    Alert.alert('Error', 'Enter phone number');
+    return;
+  }
+  if (!password) {
+    Alert.alert('Error', 'Enter password');
+    return;
+  }
+  setLoading(true);
+  const result = await signInWithPassword(phone, password);
+  setLoading(false);
+  if (result.error) {
+    Alert.alert('Error', result.error);
+  } else {
+    router.replace('/(tabs)'); // success
+  }
+};
+
 
   return (
     <View style={styles.container}>

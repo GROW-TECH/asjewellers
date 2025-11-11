@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
 import { router } from 'expo-router';
-import { useAuth } from '@/contexts/AuthContext';
 
 export default function Register() {
   const [fullName, setFullName] = useState('');
@@ -10,7 +9,11 @@ export default function Register() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [referralCode, setReferralCode] = useState('');
   const [loading, setLoading] = useState(false);
-  const { signUpWithPassword } = useAuth();
+
+  // 👇 CHANGE THIS to your local or deployed Express API endpoint
+  const API_URL = 'http://localhost:3000/api/register';
+  // ⚠️ If testing on Android Emulator use:  http://10.0.2.2:3000/api/register
+  // ⚠️ If testing on iOS Simulator use:   http://localhost:3000/api/register
 
   const handleRegister = async () => {
     if (!fullName.trim()) {
@@ -35,16 +38,35 @@ export default function Register() {
 
     setLoading(true);
 
-    const { error } = await signUpWithPassword(phone, password, fullName, referralCode);
+    try {
+      // 👇 Send POST request to your Express API
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName,
+          phone,
+          password,
+          referralCode,
+        }),
+      });
 
-    if (error) {
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        console.log('Register API Error:', data);
+        Alert.alert('Error', data.error || 'Failed to register');
+      } else {
+        Alert.alert('Success', 'Account created successfully!', [
+          { text: 'OK', onPress: () => router.replace('/(tabs)') },
+        ]);
+        window.location.href='/auth/login ';
+      }
+    } catch (error) {
+      console.error('Fetch error:', error);
+      Alert.alert('Error', 'Unable to connect to the server.');
+    } finally {
       setLoading(false);
-      Alert.alert('Error', error.message || 'Failed to register');
-    } else {
-      setLoading(false);
-      Alert.alert('Success', 'Account created successfully!', [
-        { text: 'OK', onPress: () => router.replace('/(tabs)') }
-      ]);
     }
   };
 
@@ -62,7 +84,6 @@ export default function Register() {
             placeholderTextColor="#666"
             value={fullName}
             onChangeText={setFullName}
-            autoComplete="name"
           />
         </View>
 
@@ -75,7 +96,6 @@ export default function Register() {
             value={phone}
             onChangeText={setPhone}
             keyboardType="phone-pad"
-            autoComplete="tel"
           />
         </View>
 
@@ -88,7 +108,6 @@ export default function Register() {
             value={password}
             onChangeText={setPassword}
             secureTextEntry
-            autoComplete="password-new"
           />
         </View>
 
@@ -101,7 +120,6 @@ export default function Register() {
             value={confirmPassword}
             onChangeText={setConfirmPassword}
             secureTextEntry
-            autoComplete="password-new"
           />
         </View>
 
@@ -132,7 +150,8 @@ export default function Register() {
           onPress={() => router.back()}
         >
           <Text style={styles.loginText}>
-            Already have an account? <Text style={styles.loginTextBold}>Sign In</Text>
+            Already have an account?{' '}
+            <Text style={styles.loginTextBold}>Sign In</Text>
           </Text>
         </TouchableOpacity>
       </View>
@@ -141,34 +160,12 @@ export default function Register() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#1a1a1a',
-  },
-  content: {
-    padding: 24,
-    paddingTop: 60,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#FFD700',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#999',
-    marginBottom: 32,
-  },
-  inputContainer: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 8,
-  },
+  container: { flex: 1, backgroundColor: '#1a1a1a' },
+  content: { padding: 24, paddingTop: 60 },
+  title: { fontSize: 32, fontWeight: 'bold', color: '#FFD700', marginBottom: 8 },
+  subtitle: { fontSize: 16, color: '#999', marginBottom: 32 },
+  inputContainer: { marginBottom: 20 },
+  label: { fontSize: 14, fontWeight: '600', color: '#fff', marginBottom: 8 },
   input: {
     backgroundColor: '#2a2a2a',
     borderRadius: 12,
@@ -185,25 +182,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 24,
   },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: '#1a1a1a',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  loginLink: {
-    marginTop: 24,
-    alignItems: 'center',
-    marginBottom: 40,
-  },
-  loginText: {
-    color: '#999',
-    fontSize: 14,
-  },
-  loginTextBold: {
-    color: '#FFD700',
-    fontWeight: 'bold',
-  },
+  buttonDisabled: { opacity: 0.6 },
+  buttonText: { color: '#1a1a1a', fontSize: 16, fontWeight: 'bold' },
+  loginLink: { marginTop: 24, alignItems: 'center', marginBottom: 40 },
+  loginText: { color: '#999', fontSize: 14 },
+  loginTextBold: { color: '#FFD700', fontWeight: 'bold' },
 });

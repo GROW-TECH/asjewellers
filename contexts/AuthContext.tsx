@@ -1,63 +1,86 @@
+// contexts/AuthContext.tsx
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import * as SecureStore from 'expo-secure-store';
 import { supabase } from '@/lib/supabase';
-import { Session, User } from '@supabase/supabase-js';
+import type { ReactNode } from 'react';
 
-interface Profile {
+type Profile = {
   id: string;
-  phone_number: string;
-  full_name: string;
-  referral_code: string;
-  referred_by: string | null;
-  status: string;
-}
+  full_name?: string;
+  fullName?: string;
+  phone?: string;
+  referral_code?: string;
+  // add your other profile fields
+} | null;
 
-interface AuthContextType {
-  session: Session | null;
-  user: User | null;
-  profile: Profile | null;
+type AuthContextValue = {
+  user: any | null;
+  profile: Profile;
   loading: boolean;
-  signInWithPassword: (phone: string, password: string) => Promise<{ error: any }>;
-  signUpWithPassword: (phone: string, password: string, fullName: string, referralCode?: string) => Promise<{ error: any }>;
+  signInWithPassword: (phone: string, password: string) => Promise<{ error?: string | null }>;
   signOut: () => Promise<void>;
-  refreshProfile: () => Promise<void>;
-}
+  reloadProfile: () => Promise<void>;
+};
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<any | null>(null);
+  const [profile, setProfile] = useState<Profile>(null);
   const [loading, setLoading] = useState(true);
 
+  // Keys for secure store
+  const SESSION_KEY = 'supabase_session_v1';
+
+  // Restore session from SecureStore on app start
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (session?.user) {
-        loadProfile(session.user.id);
-      } else {
+    (async () => {
+      try {
+        const raw = await SecureStore.getItemAsync(SESSION_KEY);
+        if (raw) {
+          const session = JSON.parse(raw);
+          // Apply session to supabase client so supabase.auth.getUser() works
+          await supabase.auth.setSession({
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+          });
+          // set local user object
+          const userRes = await supabase.auth.getUser();
+          const currentUser = userRes?.data?.user ?? null;
+          setUser(currentUser);
+          if (currentUser) {
+            await fetchProfile(currentUser.id);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to restore session', e);
+      } finally {
         setLoading(false);
+      }
+    })();
+
+    // listen to auth changes (optional but nice)
+    const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+        await fetchProfile(session.user.id);
+        // persist session
+        await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(session));
+      } else {
+        setUser(null);
+        setProfile(null);
+        await SecureStore.deleteItemAsync(SESSION_KEY);
       }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      (async () => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        if (session?.user) {
-          await loadProfile(session.user.id);
-        } else {
-          setProfile(null);
-          setLoading(false);
-        }
-      })();
-    });
-
-    return () => subscription.unsubscribe();
+    return () => {
+      listener?.subscription?.unsubscribe?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadProfile = async (userId: string) => {
+  // fetch profile row by user id
+  const fetchProfile = async (userId: string) => {
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -65,119 +88,103 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .eq('id', userId)
         .maybeSingle();
 
-      if (error) throw error;
-      setProfile(data);
-    } catch (error) {
-      console.error('Error loading profile:', error);
-    } finally {
-      setLoading(false);
+      if (!error && data) {
+        setProfile(data);
+      } else {
+        setProfile(null);
+      }
+    } catch (e) {
+      console.warn('fetchProfile error', e);
+      setProfile(null);
     }
   };
 
-  const refreshProfile = async () => {
-    if (user) {
-      await loadProfile(user.id);
+  // public wrapper to reload profile manually
+  const reloadProfile = async () => {
+    const userRes = await supabase.auth.getUser();
+    const currentUser = userRes?.data?.user ?? null;
+    setUser(currentUser);
+    if (currentUser) {
+      await fetchProfile(currentUser.id);
+    } else {
+      setProfile(null);
     }
   };
 
+  // sign in: call your /api/login OR Supabase directly
   const signInWithPassword = async (phone: string, password: string) => {
     try {
-      const email = `${phone}@asjewellers.app`;
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      // sanitize phone
+      const sanitizedPhone = String(phone).replace(/\D+/g, '');
+      const emailForAuth = `${sanitizedPhone}@asjewellers.local`;
+
+      // Use supabase client to sign in (client-side) OR call your server endpoint that returns a session.
+      // Here we'll prefer calling the server login API (so tokens are issued server-side).
+      // Replace API_URL with your server address (dev: machine IP)
+      const API_URL = 'http://192.168.1.32:3000/api/login'; // <-- change to your server host
+      const res = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: sanitizedPhone, password }),
       });
-      return { error };
-    } catch (error) {
-      return { error };
-    }
-  };
+      const json = await res.json();
 
-  const signUpWithPassword = async (phone: string, password: string, fullName: string, referralCode?: string) => {
-    try {
-      const email = `${phone}@asjewellers.app`;
-
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
-      });
-
-      if (authError) throw authError;
-      if (!authData.user) throw new Error('User creation failed');
-
-      let referrerId = null;
-      if (referralCode?.trim()) {
-        const { data: referrer } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('referral_code', referralCode.trim().toUpperCase())
-          .maybeSingle();
-
-        if (!referrer) {
-          throw new Error('Invalid referral code');
-        }
-        referrerId = referrer.id;
+      if (!res.ok || !json.success) {
+        return { error: json?.error || 'Login failed' };
       }
 
-      const generatedCode = 'REF' + Math.floor(100000 + Math.random() * 900000);
+      const session = json.session;
+      // session should contain access_token & refresh_token
+      if (session?.access_token && session?.refresh_token) {
+        // Persist session
+        await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(session));
 
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: authData.user.id,
-          phone_number: phone,
-          full_name: fullName.trim(),
-          referral_code: generatedCode,
-          referred_by: referrerId,
-          status: 'active',
+        // set session to supabase client
+        await supabase.auth.setSession({
+          access_token: session.access_token,
+          refresh_token: session.refresh_token,
         });
 
-      if (profileError) throw profileError;
+        // fetch user & profile
+        const userRes = await supabase.auth.getUser();
+        const currentUser = userRes?.data?.user ?? null;
+        setUser(currentUser);
+        if (currentUser) await fetchProfile(currentUser.id);
 
-      const { error: walletError } = await supabase
-        .from('wallets')
-        .insert({
-          user_id: authData.user.id,
-          saving_balance: 0,
-          referral_balance: 0,
-          total_balance: 0,
-        });
+        return { error: null };
+      }
 
-      if (walletError) throw walletError;
-
+      // If server returned only user but no session, either adapt server or do direct client sign in:
+      // const { data, error } = await supabase.auth.signInWithPassword({ email: emailForAuth, password });
+      // handle accordingly.
       return { error: null };
-    } catch (error) {
-      return { error };
+    } catch (err: any) {
+      console.error('signIn error', err);
+      return { error: err?.message || 'Network error' };
     }
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    try {
+      // clear supabase session
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.warn('supabase signOut', e);
+    }
+    setUser(null);
     setProfile(null);
+    await SecureStore.deleteItemAsync(SESSION_KEY);
   };
 
   return (
-    <AuthContext.Provider
-      value={{
-        session,
-        user,
-        profile,
-        loading,
-        signInWithPassword,
-        signUpWithPassword,
-        signOut,
-        refreshProfile,
-      }}
-    >
+    <AuthContext.Provider value={{ user, profile, loading, signInWithPassword, signOut, reloadProfile }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
+export const useAuth = () => {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
+  return ctx;
 }
