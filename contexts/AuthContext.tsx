@@ -130,38 +130,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInWithPassword = async (phone: string, password: string) => {
     try {
       const sanitizedPhone = String(phone).replace(/\D+/g, '');
-      const emailForAuth = `${sanitizedPhone}@asjewellers.local`;
+      const emailForAuth = `${sanitizedPhone}@asjewellers.app`;
 
-      const API_URL = 'http://192.168.1.32:3000/api/login';
-      const res = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: sanitizedPhone, password }),
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: emailForAuth,
+        password,
       });
-      const json = await res.json();
 
-      if (!res.ok || !json.success) {
-        return { error: json?.error || 'Login failed' };
+      if (error) {
+        return { error: error.message };
       }
 
-      const session = json.session;
-      if (session?.access_token && session?.refresh_token) {
-        await storage.setItem(SESSION_KEY, JSON.stringify(session));
-
-        await supabase.auth.setSession({
-          access_token: session.access_token,
-          refresh_token: session.refresh_token,
-        });
-
-        const userRes = await supabase.auth.getUser();
-        const currentUser = userRes?.data?.user ?? null;
-        setUser(currentUser);
-        if (currentUser) await fetchProfile(currentUser.id);
-
+      if (data.session) {
+        await storage.setItem(SESSION_KEY, JSON.stringify(data.session));
+        setUser(data.user);
+        if (data.user) {
+          await fetchProfile(data.user.id);
+        }
         return { error: null };
       }
 
-      return { error: null };
+      return { error: 'Login failed' };
     } catch (err: any) {
       console.error('signIn error', err);
       return { error: err?.message || 'Network error' };

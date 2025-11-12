@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
 import { router } from 'expo-router';
+import { supabase } from '@/lib/supabase';
 
 export default function Register() {
   const [fullName, setFullName] = useState('');
@@ -9,8 +10,6 @@ export default function Register() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [referralCode, setReferralCode] = useState('');
   const [loading, setLoading] = useState(false);
-
-  const API_URL = 'http://localhost:3000/api/register';
 
   const handleRegister = async () => {
     if (!fullName.trim()) {
@@ -36,30 +35,80 @@ export default function Register() {
     setLoading(true);
 
     try {
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fullName,
-          phone,
-          password,
-          referralCode,
-        }),
+      const sanitizedPhone = phone.replace(/\D+/g, '');
+      const email = `${sanitizedPhone}@asjewellers.app`;
+
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
       });
 
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        console.log('Register API Error:', data);
-        Alert.alert('Error', data.error || 'Failed to register');
-      } else {
-        Alert.alert('Success', 'Account created successfully!', [
-          { text: 'OK', onPress: () => router.replace('/auth/login') },
-        ]);
+      if (authError) {
+        Alert.alert('Error', authError.message);
+        setLoading(false);
+        return;
       }
-    } catch (error) {
-      console.error('Fetch error:', error);
-      Alert.alert('Error', 'Unable to connect to the server.');
+
+      if (!authData.user) {
+        Alert.alert('Error', 'User creation failed');
+        setLoading(false);
+        return;
+      }
+
+      let referrerId = null;
+      if (referralCode?.trim()) {
+        const { data: referrer } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('referral_code', referralCode.trim().toUpperCase())
+          .maybeSingle();
+
+        if (!referrer) {
+          Alert.alert('Error', 'Invalid referral code');
+          setLoading(false);
+          return;
+        }
+        referrerId = referrer.id;
+      }
+
+      const generatedCode = 'REF' + Math.floor(100000 + Math.random() * 900000);
+
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+          id: authData.user.id,
+          phone_number: sanitizedPhone,
+          full_name: fullName.trim(),
+          referral_code: generatedCode,
+          referred_by: referrerId,
+          status: 'active',
+        });
+
+      if (profileError) {
+        Alert.alert('Error', profileError.message);
+        setLoading(false);
+        return;
+      }
+
+      const { error: walletError } = await supabase
+        .from('wallets')
+        .insert({
+          user_id: authData.user.id,
+          saving_balance: 0,
+          referral_balance: 0,
+          total_balance: 0,
+        });
+
+      if (walletError) {
+        console.error('Wallet creation error:', walletError);
+      }
+
+      Alert.alert('Success', 'Account created successfully!', [
+        { text: 'OK', onPress: () => router.replace('/auth/login') },
+      ]);
+    } catch (error: any) {
+      console.error('Registration error:', error);
+      Alert.alert('Error', error.message || 'Unable to register.');
     } finally {
       setLoading(false);
     }
