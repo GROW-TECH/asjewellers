@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
 import { router } from 'expo-router';
-import { useAuth } from '@/contexts/AuthContext';
 
 export default function Register() {
   const [fullName, setFullName] = useState('');
@@ -10,7 +9,8 @@ export default function Register() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [referralCode, setReferralCode] = useState('');
   const [loading, setLoading] = useState(false);
-  const { signUpWithPassword } = useAuth();
+
+  const API_URL = 'http://localhost:3000/api/register';
 
   const handleRegister = async () => {
     if (!fullName.trim()) {
@@ -35,16 +35,33 @@ export default function Register() {
 
     setLoading(true);
 
-    const { error } = await signUpWithPassword(phone, password, fullName, referralCode);
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName,
+          phone,
+          password,
+          referralCode,
+        }),
+      });
 
-    if (error) {
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        console.log('Register API Error:', data);
+        Alert.alert('Error', data.error || 'Failed to register');
+      } else {
+        Alert.alert('Success', 'Account created successfully!', [
+          { text: 'OK', onPress: () => router.replace('/auth/login') },
+        ]);
+      }
+    } catch (error) {
+      console.error('Fetch error:', error);
+      Alert.alert('Error', 'Unable to connect to the server.');
+    } finally {
       setLoading(false);
-      Alert.alert('Error', error.message || 'Failed to register');
-    } else {
-      setLoading(false);
-      Alert.alert('Success', 'Account created successfully!', [
-        { text: 'OK', onPress: () => router.replace('/(tabs)') }
-      ]);
     }
   };
 
