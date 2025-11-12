@@ -3,7 +3,10 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  base: '/admin-web/',
+  base: '/',
+  build: {
+    outDir: '../admin-dist',
+  },
   server: {
     port: 3000,
   },
