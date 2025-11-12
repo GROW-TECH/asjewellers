@@ -95,13 +95,33 @@ Only users with `is_admin = true` can access the admin panel.
 
 ## Deployment
 
-This admin panel can be deployed to:
-- **Vercel**: Connect your git repository
-- **Netlify**: Drag and drop the `dist` folder
-- **Any static hosting**: Upload the built files
+### Option 1: Deploy to Vercel (Recommended)
+
+1. Install Vercel CLI globally:
+```bash
+npm i -g vercel
+```
+
+2. Navigate to the admin-web directory:
+```bash
+cd admin-web
+```
+
+3. Deploy:
+```bash
+vercel --prod
+```
+
+4. Follow the prompts and your admin panel will be live on its own domain!
+
+### Option 2: Other Platforms
+
+This admin panel can also be deployed to:
+- **Netlify**: Drag and drop the `../admin-dist` folder
+- **Any static hosting**: Upload the built files from `../admin-dist`
 
 Build command: `npm run build`
-Output directory: `dist`
+Output directory: `../admin-dist`
 
 ## Security
 
