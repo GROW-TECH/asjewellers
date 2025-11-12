@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
-import { UserCircle, Phone, LogOut, Wallet, Users, Award, Shield } from 'lucide-react-native';
+import { UserCircle, Phone, LogOut, Wallet, Users, Award } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { router } from 'expo-router';
 
@@ -80,16 +80,6 @@ export default function ProfileScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Quick Actions</Text>
-
-        {profile?.is_admin && (
-          <TouchableOpacity
-            style={[styles.actionCard, styles.adminCard]}
-            onPress={() => router.push('/admin')}
-          >
-            <Shield size={24} color="#F59E0B" />
-            <Text style={[styles.actionText, { color: '#F59E0B' }]}>Admin Panel</Text>
-          </TouchableOpacity>
-        )}
 
         <TouchableOpacity
           style={styles.actionCard}
@@ -220,11 +210,6 @@ const styles = StyleSheet.create({
     gap: 16,
     borderWidth: 1,
     borderColor: '#333',
-  },
-  adminCard: {
-    backgroundColor: '#1E293B',
-    borderColor: '#F59E0B',
-    borderWidth: 2,
   },
   actionText: {
     fontSize: 16,
