@@ -1,5 +1,5 @@
-// contexts/AuthContext.tsx
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { supabase } from '@/lib/supabase';
 import type { ReactNode } from 'react';
@@ -26,17 +26,40 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+const SESSION_KEY = 'supabase_session_v1';
+
+const storage = {
+  getItem: async (key: string): Promise<string | null> => {
+    if (Platform.OS === 'web') {
+      return localStorage.getItem(key);
+    }
+    return await SecureStore.getItemAsync(key);
+  },
+  setItem: async (key: string, value: string): Promise<void> => {
+    if (Platform.OS === 'web') {
+      localStorage.setItem(key, value);
+    } else {
+      await SecureStore.setItemAsync(key, value);
+    }
+  },
+  removeItem: async (key: string): Promise<void> => {
+    if (Platform.OS === 'web') {
+      localStorage.removeItem(key);
+    } else {
+      await SecureStore.deleteItemAsync(key);
+    }
+  },
+};
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<any | null>(null);
   const [profile, setProfile] = useState<Profile>(null);
   const [loading, setLoading] = useState(true);
 
-  const SESSION_KEY = 'supabase_session_v1';
-
   useEffect(() => {
     (async () => {
       try {
-        const raw = await SecureStore.getItemAsync(SESSION_KEY);
+        const raw = await storage.getItem(SESSION_KEY);
         if (raw) {
           const session = JSON.parse(raw);
           await supabase.auth.setSession({
@@ -61,11 +84,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (session?.user) {
         setUser(session.user);
         await fetchProfile(session.user.id);
-        await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(session));
+        await storage.setItem(SESSION_KEY, JSON.stringify(session));
       } else {
         setUser(null);
         setProfile(null);
-        await SecureStore.deleteItemAsync(SESSION_KEY);
+        await storage.removeItem(SESSION_KEY);
       }
     });
 
@@ -123,7 +146,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const session = json.session;
       if (session?.access_token && session?.refresh_token) {
-        await SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(session));
+        await storage.setItem(SESSION_KEY, JSON.stringify(session));
 
         await supabase.auth.setSession({
           access_token: session.access_token,
@@ -153,7 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setUser(null);
     setProfile(null);
-    await SecureStore.deleteItemAsync(SESSION_KEY);
+    await storage.removeItem(SESSION_KEY);
   };
 
   return (
