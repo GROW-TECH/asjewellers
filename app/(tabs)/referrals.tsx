@@ -183,9 +183,13 @@ export default function ReferralsScreen() {
   };
 
   const loadTreeData = async () => {
-    if (!profile?.id) return;
+    if (!profile?.id) {
+      console.log('No profile id, skipping tree load');
+      return;
+    }
 
     try {
+      console.log('Loading tree for user:', profile.id);
       const { data: directReferrals, error } = await supabase
         .from('profiles')
         .select('id, full_name, phone_number, referral_code, created_at')
@@ -196,7 +200,10 @@ export default function ReferralsScreen() {
         return;
       }
 
+      console.log('Direct referrals loaded:', directReferrals?.length || 0);
+
       if (!directReferrals || directReferrals.length === 0) {
+        console.log('No direct referrals found');
         setTreeData([]);
         return;
       }
@@ -252,6 +259,7 @@ export default function ReferralsScreen() {
         }
       }
 
+      console.log('Tree built with nodes:', tree.length);
       setTreeData(tree);
     } catch (error) {
       console.error('Error in loadTreeData:', error);
@@ -325,6 +333,8 @@ export default function ReferralsScreen() {
   };
 
   const renderTree = () => {
+    console.log('Rendering tree with data length:', treeData.length);
+
     if (treeData.length === 0) {
       return (
         <View style={styles.emptyTree}>
@@ -420,8 +430,26 @@ export default function ReferralsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>My Downline Tree</Text>
-        <Text style={styles.sectionSubtitle}>Tap on any member to expand their downline</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <View>
+            <Text style={styles.sectionTitle}>My Downline Tree</Text>
+            <Text style={styles.sectionSubtitle}>Tap on any member to expand their downline</Text>
+          </View>
+          <TouchableOpacity
+            style={{ backgroundColor: '#FFD700', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 }}
+            onPress={loadTreeData}
+          >
+            <Text style={{ color: '#000', fontSize: 12, fontWeight: '600' }}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={{ backgroundColor: '#2a2a2a', padding: 12, borderRadius: 8, marginBottom: 12 }}>
+          <Text style={{ color: '#FFD700', fontSize: 12, marginBottom: 4 }}>Debug Info:</Text>
+          <Text style={{ color: '#fff', fontSize: 11 }}>Profile ID: {profile?.id || 'null'}</Text>
+          <Text style={{ color: '#fff', fontSize: 11 }}>Tree Data Length: {treeData.length}</Text>
+          <Text style={{ color: '#fff', fontSize: 11 }}>Loading: {loading ? 'Yes' : 'No'}</Text>
+        </View>
+
         {renderTree()}
       </View>
 
