@@ -1,10 +1,11 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
-import { UserCircle, Phone, LogOut, Wallet, Users, Award } from 'lucide-react-native';
+import { UserCircle, Phone, LogOut, Wallet, Users, Award, Shield } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { router } from 'expo-router';
 
 export default function ProfileScreen() {
   const { profile, signOut } = useAuth();
+  const isAdmin = profile?.role === 'admin';
 
   const handleSignOut = () => {
     Alert.alert(
@@ -80,6 +81,16 @@ export default function ProfileScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Quick Actions</Text>
+
+        {isAdmin && (
+          <TouchableOpacity
+            style={[styles.actionCard, styles.adminCard]}
+            onPress={() => router.push('/admin')}
+          >
+            <Shield size={24} color="#D4AF37" />
+            <Text style={styles.actionText}>Admin Panel</Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity
           style={styles.actionCard}
@@ -215,6 +226,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#fff',
+  },
+  adminCard: {
+    borderColor: '#D4AF37',
+    borderWidth: 2,
   },
   signOutButton: {
     backgroundColor: '#2a2a2a',
