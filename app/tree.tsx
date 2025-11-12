@@ -1,109 +1,251 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { ChevronDown, ChevronRight, ArrowLeft, Users } from 'lucide-react-native';
-import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
 
 interface TreeNode {
   id: string;
   full_name: string;
   phone_number: string;
-  referral_code: string;
-  created_at: string;
   level: number;
   children: TreeNode[];
-  directReferrals: number;
 }
 
+const STATIC_TREE_DATA: TreeNode[] = [
+  {
+    id: '1',
+    full_name: 'Alice Johnson',
+    phone_number: '9876543211',
+    level: 1,
+    children: [
+      {
+        id: '1-1',
+        full_name: 'David Wilson',
+        phone_number: '9876543221',
+        level: 2,
+        children: [
+          {
+            id: '1-1-1',
+            full_name: 'Jack Anderson',
+            phone_number: '9876543231',
+            level: 3,
+            children: [
+              {
+                id: '1-1-1-1',
+                full_name: 'Oliver Clark',
+                phone_number: '9876543241',
+                level: 4,
+                children: [
+                  {
+                    id: '1-1-1-1-1',
+                    full_name: 'Rachel Walker',
+                    phone_number: '9876543251',
+                    level: 5,
+                    children: [
+                      {
+                        id: '1-1-1-1-1-1',
+                        full_name: 'Uma Allen',
+                        phone_number: '9876543261',
+                        level: 6,
+                        children: [
+                          {
+                            id: '1-1-1-1-1-1-1',
+                            full_name: 'Wendy Wright',
+                            phone_number: '9876543271',
+                            level: 7,
+                            children: [
+                              {
+                                id: '1-1-1-1-1-1-1-1',
+                                full_name: 'Yara Green',
+                                phone_number: '9876543281',
+                                level: 8,
+                                children: [
+                                  {
+                                    id: '1-1-1-1-1-1-1-1-1',
+                                    full_name: 'Aaron Baker',
+                                    phone_number: '9876543291',
+                                    level: 9,
+                                    children: [
+                                      {
+                                        id: '1-1-1-1-1-1-1-1-1-1',
+                                        full_name: 'Chloe Carter',
+                                        phone_number: '9876543201',
+                                        level: 10,
+                                        children: [],
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: '1-2',
+        full_name: 'Emma Brown',
+        phone_number: '9876543222',
+        level: 2,
+        children: [
+          {
+            id: '1-2-1',
+            full_name: 'Kelly Thomas',
+            phone_number: '9876543232',
+            level: 3,
+            children: [
+              {
+                id: '1-2-1-1',
+                full_name: 'Patricia Lewis',
+                phone_number: '9876543242',
+                level: 4,
+                children: [
+                  {
+                    id: '1-2-1-1-1',
+                    full_name: 'Samuel Hall',
+                    phone_number: '9876543252',
+                    level: 5,
+                    children: [
+                      {
+                        id: '1-2-1-1-1-1',
+                        full_name: 'Victor King',
+                        phone_number: '9876543262',
+                        level: 6,
+                        children: [
+                          {
+                            id: '1-2-1-1-1-1-1',
+                            full_name: 'Xavier Scott',
+                            phone_number: '9876543272',
+                            level: 7,
+                            children: [
+                              {
+                                id: '1-2-1-1-1-1-1-1',
+                                full_name: 'Yvonne Adams',
+                                phone_number: '9876543282',
+                                level: 8,
+                                children: [
+                                  {
+                                    id: '1-2-1-1-1-1-1-1-1',
+                                    full_name: 'Zachary Nelson',
+                                    phone_number: '9876543292',
+                                    level: 9,
+                                    children: [
+                                      {
+                                        id: '1-2-1-1-1-1-1-1-1-1',
+                                        full_name: 'Dylan Mitchell',
+                                        phone_number: '9876543202',
+                                        level: 10,
+                                        children: [],
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  {
+                    id: '1-2-1-1-2',
+                    full_name: 'Teresa Young',
+                    phone_number: '9876543253',
+                    level: 5,
+                    children: [],
+                  },
+                ],
+              },
+              {
+                id: '1-2-1-2',
+                full_name: 'Quinn Robinson',
+                phone_number: '9876543243',
+                level: 4,
+                children: [],
+              },
+            ],
+          },
+          {
+            id: '1-2-2',
+            full_name: 'Laura Jackson',
+            phone_number: '9876543233',
+            level: 3,
+            children: [],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: '2',
+    full_name: 'Bob Smith',
+    phone_number: '9876543212',
+    level: 1,
+    children: [
+      {
+        id: '2-1',
+        full_name: 'Frank Miller',
+        phone_number: '9876543223',
+        level: 2,
+        children: [
+          {
+            id: '2-1-1',
+            full_name: 'Mike White',
+            phone_number: '9876543234',
+            level: 3,
+            children: [],
+          },
+          {
+            id: '2-1-2',
+            full_name: 'Nancy Harris',
+            phone_number: '9876543235',
+            level: 3,
+            children: [],
+          },
+        ],
+      },
+      {
+        id: '2-2',
+        full_name: 'Grace Lee',
+        phone_number: '9876543224',
+        level: 2,
+        children: [],
+      },
+      {
+        id: '2-3',
+        full_name: 'Henry Garcia',
+        phone_number: '9876543225',
+        level: 2,
+        children: [],
+      },
+    ],
+  },
+  {
+    id: '3',
+    full_name: 'Carol Davis',
+    phone_number: '9876543213',
+    level: 1,
+    children: [
+      {
+        id: '3-1',
+        full_name: 'Ivy Martinez',
+        phone_number: '9876543226',
+        level: 2,
+        children: [],
+      },
+    ],
+  },
+];
+
 export default function TreeScreen() {
-  const { profile } = useAuth();
-  const [treeData, setTreeData] = useState<TreeNode[]>([]);
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-
-  useEffect(() => {
-    loadTreeData();
-  }, [profile?.id]);
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await loadTreeData();
-    setRefreshing(false);
-  };
-
-  const loadTreeData = async () => {
-    if (!profile?.id) return;
-
-    setLoading(true);
-    try {
-      console.log('Loading tree for profile:', profile.id);
-      const { data: directReferrals, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('referred_by', profile.id)
-        .order('created_at', { ascending: false});
-
-      console.log('Direct referrals:', directReferrals?.length, 'Error:', error);
-
-      if (directReferrals && directReferrals.length > 0) {
-        const treeNodes = await Promise.all(
-          directReferrals.map(async (user) => {
-            const children = await loadChildren(user.id);
-            return {
-              id: user.id,
-              full_name: user.full_name,
-              phone_number: user.phone_number,
-              referral_code: user.referral_code,
-              created_at: user.created_at,
-              level: 1,
-              children,
-              directReferrals: children.length,
-            };
-          })
-        );
-        console.log('Tree nodes built:', treeNodes.length);
-        setTreeData(treeNodes);
-      } else {
-        setTreeData([]);
-      }
-    } catch (error) {
-      console.error('Error loading tree:', error);
-      setTreeData([]);
-    }
-    setLoading(false);
-  };
-
-  const loadChildren = async (parentId: string, currentLevel: number = 1): Promise<TreeNode[]> => {
-    if (currentLevel >= 10) return [];
-
-    const { data: children } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('referred_by', parentId)
-      .order('created_at', { ascending: false });
-
-    if (!children || children.length === 0) return [];
-
-    const childNodes = await Promise.all(
-      children.map(async (child) => {
-        const grandChildren = await loadChildren(child.id, currentLevel + 1);
-        return {
-          id: child.id,
-          full_name: child.full_name,
-          phone_number: child.phone_number,
-          referral_code: child.referral_code,
-          created_at: child.created_at,
-          level: currentLevel + 1,
-          children: grandChildren,
-          directReferrals: grandChildren.length,
-        };
-      })
-    );
-
-    return childNodes;
-  };
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(['1', '1-1', '1-2']));
 
   const toggleNode = (nodeId: string) => {
     const newExpanded = new Set(expandedNodes);
@@ -115,10 +257,16 @@ export default function TreeScreen() {
     setExpandedNodes(newExpanded);
   };
 
+  const countChildren = (node: TreeNode): number => {
+    if (node.children.length === 0) return 0;
+    return node.children.length + node.children.reduce((sum, child) => sum + countChildren(child), 0);
+  };
+
   const renderTreeNode = (node: TreeNode, depth: number = 0) => {
     const isExpanded = expandedNodes.has(node.id);
     const hasChildren = node.children.length > 0;
     const indentWidth = depth * 20;
+    const totalChildren = countChildren(node);
 
     return (
       <View key={node.id}>
@@ -153,7 +301,7 @@ export default function TreeScreen() {
             {hasChildren && (
               <View style={styles.childrenBadge}>
                 <Users size={14} color="#3B82F6" />
-                <Text style={styles.childrenCount}>{node.directReferrals}</Text>
+                <Text style={styles.childrenCount}>{totalChildren}</Text>
               </View>
             )}
           </View>
@@ -178,27 +326,9 @@ export default function TreeScreen() {
         }
       });
     };
-    countNodes(treeData);
+    countNodes(STATIC_TREE_DATA);
     return count;
   };
-
-  if (loading) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <ArrowLeft size={24} color="#FFF" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Downline Tree</Text>
-          <View style={{ width: 40 }} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#F59E0B" />
-          <Text style={styles.loadingText}>Loading tree...</Text>
-        </View>
-      </View>
-    );
-  }
 
   return (
     <View style={styles.container}>
@@ -207,9 +337,7 @@ export default function TreeScreen() {
           <ArrowLeft size={24} color="#FFF" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Downline Tree</Text>
-        <TouchableOpacity onPress={handleRefresh} style={styles.refreshButton} disabled={refreshing}>
-          <Text style={styles.refreshText}>{refreshing ? '...' : 'Refresh'}</Text>
-        </TouchableOpacity>
+        <View style={{ width: 40 }} />
       </View>
 
       <View style={styles.statsBar}>
@@ -220,27 +348,53 @@ export default function TreeScreen() {
         <View style={styles.statDivider} />
         <View style={styles.statItem}>
           <Text style={styles.statLabel}>Direct Referrals</Text>
-          <Text style={styles.statValue}>{treeData.length}</Text>
+          <Text style={styles.statValue}>{STATIC_TREE_DATA.length}</Text>
         </View>
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {treeData.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Users size={64} color="#475569" />
-            <Text style={styles.emptyStateTitle}>No referrals yet</Text>
-            <Text style={styles.emptyStateText}>
-              Share your referral code to build your team
-            </Text>
+        <View style={styles.treeContainer}>
+          <Text style={styles.instructionText}>
+            Tap on any member with a badge to expand their downline
+          </Text>
+          <Text style={styles.legendText}>
+            🟢 Two complete 10-level chains showing full MLM structure
+          </Text>
+          {STATIC_TREE_DATA.map((node) => renderTreeNode(node))}
+        </View>
+
+        <View style={styles.infoCard}>
+          <Text style={styles.infoTitle}>Tree Structure Summary</Text>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Level 1:</Text>
+            <Text style={styles.infoValue}>3 members (Alice, Bob, Carol)</Text>
           </View>
-        ) : (
-          <View style={styles.treeContainer}>
-            <Text style={styles.instructionText}>
-              Tap on any member to expand their downline
-            </Text>
-            {treeData.map((node) => renderTreeNode(node))}
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Level 2:</Text>
+            <Text style={styles.infoValue}>6 members</Text>
           </View>
-        )}
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Level 3:</Text>
+            <Text style={styles.infoValue}>5 members</Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Level 4:</Text>
+            <Text style={styles.infoValue}>3 members</Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Level 5:</Text>
+            <Text style={styles.infoValue}>3 members</Text>
+          </View>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Levels 6-10:</Text>
+            <Text style={styles.infoValue}>2 members each</Text>
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabelBold}>Total:</Text>
+            <Text style={styles.infoValueBold}>30 members across 10 levels</Text>
+          </View>
+        </View>
 
         <View style={{ height: 100 }} />
       </ScrollView>
@@ -275,17 +429,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#FFF',
   },
-  refreshButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: '#F59E0B',
-    borderRadius: 8,
-  },
-  refreshText: {
-    color: '#FFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
   statsBar: {
     flexDirection: 'row',
     backgroundColor: '#1E293B',
@@ -318,26 +461,24 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 20,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingText: {
-    color: '#94A3B8',
-    fontSize: 16,
-    marginTop: 16,
-  },
   treeContainer: {
     backgroundColor: '#1E293B',
     borderRadius: 16,
     padding: 16,
+    marginBottom: 20,
   },
   instructionText: {
     color: '#94A3B8',
     fontSize: 14,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  legendText: {
+    color: '#10B981',
+    fontSize: 12,
     marginBottom: 20,
     textAlign: 'center',
+    fontWeight: '600',
   },
   nodeContainer: {
     marginBottom: 8,
@@ -402,21 +543,45 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: 'bold',
   },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
+  infoCard: {
+    backgroundColor: '#1E293B',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
   },
-  emptyStateTitle: {
-    color: '#FFF',
-    fontSize: 20,
+  infoTitle: {
+    fontSize: 18,
     fontWeight: 'bold',
-    marginTop: 20,
-    marginBottom: 8,
+    color: '#FFF',
+    marginBottom: 16,
   },
-  emptyStateText: {
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  infoLabel: {
     color: '#94A3B8',
     fontSize: 14,
-    textAlign: 'center',
-    maxWidth: 250,
+  },
+  infoValue: {
+    color: '#FFF',
+    fontSize: 14,
+  },
+  infoLabelBold: {
+    color: '#F59E0B',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  infoValueBold: {
+    color: '#F59E0B',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#334155',
+    marginVertical: 12,
   },
 });
