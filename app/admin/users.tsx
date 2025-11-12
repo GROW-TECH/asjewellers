@@ -9,7 +9,7 @@ interface UserProfile {
   full_name: string;
   email: string;
   phone: string;
-  role: string;
+  is_admin: boolean;
   created_at: string;
 }
 
@@ -29,8 +29,7 @@ export default function UsersManagement() {
       const filtered = users.filter(
         (u) =>
           u.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          u.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          u.phone?.includes(searchQuery)
+          u.email?.toLowerCase().includes(searchQuery.toLowerCase())
       );
       setFilteredUsers(filtered);
     } else {
@@ -42,7 +41,7 @@ export default function UsersManagement() {
     try {
       const { data: profiles } = await supabase
         .from('profiles')
-        .select('id, full_name, phone, role, created_at')
+        .select('id, full_name, phone_number, is_admin, created_at')
         .order('created_at', { ascending: false });
 
       if (profiles) {
@@ -66,18 +65,18 @@ export default function UsersManagement() {
     }
   }
 
-  async function toggleAdminRole(userId: string, currentRole: string) {
+  async function toggleAdminRole(userId: string, currentIsAdmin: boolean) {
     try {
-      const newRole = currentRole === 'admin' ? 'user' : 'admin';
+      const newIsAdmin = !currentIsAdmin;
 
       const { error } = await supabase
         .from('profiles')
-        .update({ role: newRole })
+        .update({ is_admin: newIsAdmin })
         .eq('id', userId);
 
       if (error) throw error;
 
-      Alert.alert('Success', `User role updated to ${newRole}`);
+      Alert.alert('Success', `User ${newIsAdmin ? 'promoted to' : 'removed from'} admin`);
       loadUsers();
     } catch (error) {
       console.error('Error updating role:', error);
@@ -90,7 +89,7 @@ export default function UsersManagement() {
       <View style={styles.userCard}>
         <View style={styles.userInfo}>
           <View style={styles.userIcon}>
-            {item.role === 'admin' ? (
+            {item.is_admin ? (
               <Shield size={24} color="#D4AF37" />
             ) : (
               <User size={24} color="#999" />
@@ -100,15 +99,15 @@ export default function UsersManagement() {
             <Text style={styles.userName}>{item.full_name || 'No Name'}</Text>
             <Text style={styles.userEmail}>{item.email}</Text>
             <Text style={styles.userPhone}>{item.phone || 'No Phone'}</Text>
-            <Text style={styles.userRole}>Role: {item.role}</Text>
+            <Text style={styles.userRole}>Role: {item.is_admin ? 'Admin' : 'User'}</Text>
           </View>
         </View>
         <TouchableOpacity
-          style={[styles.roleBtn, item.role === 'admin' && styles.adminBtn]}
-          onPress={() => toggleAdminRole(item.id, item.role)}
+          style={[styles.roleBtn, item.is_admin && styles.adminBtn]}
+          onPress={() => toggleAdminRole(item.id, item.is_admin)}
         >
           <Text style={styles.roleBtnText}>
-            {item.role === 'admin' ? 'Remove Admin' : 'Make Admin'}
+            {item.is_admin ? 'Remove Admin' : 'Make Admin'}
           </Text>
         </TouchableOpacity>
       </View>

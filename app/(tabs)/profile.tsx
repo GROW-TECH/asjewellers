@@ -5,7 +5,7 @@ import { router } from 'expo-router';
 
 export default function ProfileScreen() {
   const { profile, signOut } = useAuth();
-  const isAdmin = profile?.role === 'admin';
+  const isAdmin = profile?.is_admin === true;
 
   const handleSignOut = () => {
     Alert.alert(
