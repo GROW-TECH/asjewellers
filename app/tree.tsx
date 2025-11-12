@@ -21,23 +21,33 @@ export default function TreeScreen() {
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     loadTreeData();
   }, [profile?.id]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadTreeData();
+    setRefreshing(false);
+  };
 
   const loadTreeData = async () => {
     if (!profile?.id) return;
 
     setLoading(true);
     try {
-      const { data: directReferrals } = await supabase
+      console.log('Loading tree for profile:', profile.id);
+      const { data: directReferrals, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('referred_by', profile.id)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false});
 
-      if (directReferrals) {
+      console.log('Direct referrals:', directReferrals?.length, 'Error:', error);
+
+      if (directReferrals && directReferrals.length > 0) {
         const treeNodes = await Promise.all(
           directReferrals.map(async (user) => {
             const children = await loadChildren(user.id);
@@ -53,10 +63,14 @@ export default function TreeScreen() {
             };
           })
         );
+        console.log('Tree nodes built:', treeNodes.length);
         setTreeData(treeNodes);
+      } else {
+        setTreeData([]);
       }
     } catch (error) {
       console.error('Error loading tree:', error);
+      setTreeData([]);
     }
     setLoading(false);
   };
@@ -193,7 +207,9 @@ export default function TreeScreen() {
           <ArrowLeft size={24} color="#FFF" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Downline Tree</Text>
-        <View style={{ width: 40 }} />
+        <TouchableOpacity onPress={handleRefresh} style={styles.refreshButton} disabled={refreshing}>
+          <Text style={styles.refreshText}>{refreshing ? '...' : 'Refresh'}</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.statsBar}>
@@ -258,6 +274,17 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#FFF',
+  },
+  refreshButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#F59E0B',
+    borderRadius: 8,
+  },
+  refreshText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
   statsBar: {
     flexDirection: 'row',

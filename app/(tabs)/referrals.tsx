@@ -76,7 +76,7 @@ export default function ReferralsScreen() {
         const { data: referrals } = await supabase
           .from('referral_tree')
           .select('referred_user_id')
-          .eq('referrer_id', profile.id)
+          .eq('user_id', profile.id)
           .eq('level', level);
 
         const count = referrals?.length || 0;
