@@ -13,7 +13,7 @@ export default function Login() {
     setLoading(true);
     setError('');
 
-    const email = `${phoneNumber}@asjewellers.com`;
+    const email = `${phoneNumber}@asjewellers.app`;
 
     const { data, error: signInError } = await supabase.auth.signInWithPassword({
       email,
