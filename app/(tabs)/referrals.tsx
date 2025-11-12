@@ -74,6 +74,107 @@ export default function ReferralsScreen() {
     loadData();
   }, [profile?.id]);
 
+  useEffect(() => {
+    const dummyData: TreeNode[] = [
+      {
+        id: '11111111-1111-1111-1111-111111111111',
+        full_name: 'Alice Johnson',
+        phone_number: '9876543211',
+        referral_code: 'REF111111',
+        created_at: new Date().toISOString(),
+        level: 1,
+        directReferrals: 2,
+        children: [
+          {
+            id: '22222222-2222-2222-2222-222222222221',
+            full_name: 'David Wilson',
+            phone_number: '9876543221',
+            referral_code: 'REF222221',
+            created_at: new Date().toISOString(),
+            level: 2,
+            directReferrals: 2,
+            children: [
+              {
+                id: '33333333-3333-3333-3333-333333333331',
+                full_name: 'Jack Anderson',
+                phone_number: '9876543331',
+                referral_code: 'REF333331',
+                created_at: new Date().toISOString(),
+                level: 3,
+                directReferrals: 0,
+                children: [],
+              },
+            ],
+          },
+          {
+            id: '22222222-2222-2222-2222-222222222222',
+            full_name: 'Emma Brown',
+            phone_number: '9876543222',
+            referral_code: 'REF222222',
+            created_at: new Date().toISOString(),
+            level: 2,
+            directReferrals: 0,
+            children: [],
+          },
+        ],
+      },
+      {
+        id: '11111111-1111-1111-1111-111111111112',
+        full_name: 'Bob Smith',
+        phone_number: '9876543212',
+        referral_code: 'REF111112',
+        created_at: new Date().toISOString(),
+        level: 1,
+        directReferrals: 3,
+        children: [
+          {
+            id: '22222222-2222-2222-2222-222222222223',
+            full_name: 'Frank Miller',
+            phone_number: '9876543223',
+            referral_code: 'REF222223',
+            created_at: new Date().toISOString(),
+            level: 2,
+            directReferrals: 0,
+            children: [],
+          },
+          {
+            id: '22222222-2222-2222-2222-222222222224',
+            full_name: 'Grace Lee',
+            phone_number: '9876543224',
+            referral_code: 'REF222224',
+            created_at: new Date().toISOString(),
+            level: 2,
+            directReferrals: 0,
+            children: [],
+          },
+        ],
+      },
+      {
+        id: '11111111-1111-1111-1111-111111111113',
+        full_name: 'Carol Davis',
+        phone_number: '9876543213',
+        referral_code: 'REF111113',
+        created_at: new Date().toISOString(),
+        level: 1,
+        directReferrals: 1,
+        children: [
+          {
+            id: '22222222-2222-2222-2222-222222222226',
+            full_name: 'Ivy Martinez',
+            phone_number: '9876543226',
+            referral_code: 'REF222226',
+            created_at: new Date().toISOString(),
+            level: 2,
+            directReferrals: 0,
+            children: [],
+          },
+        ],
+      },
+    ];
+
+    setTreeData(dummyData);
+  }, []);
+
   const loadLevelConfig = async () => {
     const { data } = await supabase
       .from('referral_levels_config')
