@@ -1,33 +1,14 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Share } from 'react-native';
-import { Users, Copy, TrendingUp, IndianRupee, ChevronDown, ChevronRight } from 'lucide-react-native';
+import { Users, Copy, TrendingUp, IndianRupee } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
+import { router } from 'expo-router';
 
 interface ReferralData {
   level: number;
   count: number;
   commission: number;
-  users: ReferralUser[];
-}
-
-interface ReferralUser {
-  id: string;
-  full_name: string;
-  phone_number: string;
-  created_at: string;
-  referral_code: string;
-}
-
-interface TreeNode {
-  id: string;
-  full_name: string;
-  phone_number: string;
-  referral_code: string;
-  created_at: string;
-  level: number;
-  children: TreeNode[];
-  directReferrals: number;
 }
 
 interface Commission {
@@ -53,26 +34,24 @@ export default function ReferralsScreen() {
   const [recentCommissions, setRecentCommissions] = useState<Commission[]>([]);
   const [levelConfig, setLevelConfig] = useState<LevelConfig[]>([]);
   const [totalCommission, setTotalCommission] = useState(0);
-  const [expandedLevels, setExpandedLevels] = useState<Set<number>>(new Set());
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
-  const [treeData, setTreeData] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(true);
+  const [totalReferrals, setTotalReferrals] = useState(0);
 
   useEffect(() => {
-    const loadData = async () => {
-      if (profile?.id) {
-        setLoading(true);
-        await Promise.all([
-          loadReferralData(),
-          loadLevelConfig(),
-          loadTreeData()
-        ]);
-        setLoading(false);
-      }
-    };
-
     loadData();
   }, [profile?.id]);
+
+  const loadData = async () => {
+    if (!profile?.id) return;
+
+    setLoading(true);
+    await Promise.all([
+      loadLevelConfig(),
+      loadReferralData(),
+      loadRecentCommissions()
+    ]);
+    setLoading(false);
+  };
 
   const loadLevelConfig = async () => {
     const { data } = await supabase
@@ -91,82 +70,61 @@ export default function ReferralsScreen() {
     try {
       const levelData: ReferralData[] = [];
       let total = 0;
+      let totalCount = 0;
 
       for (let level = 1; level <= 10; level++) {
-        const { data: referrals, error: refError } = await supabase
+        const { data: referrals } = await supabase
           .from('referral_tree')
-          .select(`
-            referred_user_id,
-            profiles:profiles!referral_tree_referred_user_id_fkey(
-              id,
-              full_name,
-              phone_number,
-              referral_code,
-              created_at
-            )
-          `)
-          .eq('user_id', profile.id)
+          .select('referred_user_id')
+          .eq('referrer_id', profile.id)
           .eq('level', level);
 
-        if (refError) {
-          console.error('Error loading referrals:', refError);
-        }
+        const count = referrals?.length || 0;
+        totalCount += count;
 
-        const { data: commissions, error: commError } = await supabase
+        const { data: commissions } = await supabase
           .from('referral_commissions')
           .select('amount')
           .eq('user_id', profile.id)
           .eq('level', level);
 
-        if (commError) {
-          console.error('Error loading commissions:', commError);
-        }
-
-        const levelCommission = commissions?.reduce((sum, c) => sum + parseFloat(c.amount.toString()), 0) || 0;
+        const levelCommission = commissions?.reduce((sum, c) => sum + c.amount, 0) || 0;
         total += levelCommission;
-
-        const users: ReferralUser[] = referrals?.map((r: any) => ({
-          id: r.profiles?.id || '',
-          full_name: r.profiles?.full_name || 'Unknown',
-          phone_number: r.profiles?.phone_number || '',
-          referral_code: r.profiles?.referral_code || '',
-          created_at: r.profiles?.created_at || new Date().toISOString(),
-        })).filter((u: ReferralUser) => u.id) || [];
 
         levelData.push({
           level,
-          count: referrals?.length || 0,
+          count,
           commission: levelCommission,
-          users,
         });
       }
 
       setReferralsByLevel(levelData);
       setTotalCommission(total);
-
-      const { data: recent, error: recentError } = await supabase
-        .from('referral_commissions')
-        .select(`
-          id,
-          level,
-          amount,
-          percentage,
-          created_at,
-          from_user:profiles!referral_commissions_from_user_id_fkey(full_name)
-        `)
-        .eq('user_id', profile.id)
-        .order('created_at', { ascending: false })
-        .limit(10);
-
-      if (recentError) {
-        console.error('Error loading recent commissions:', recentError);
-      }
-
-      if (recent) {
-        setRecentCommissions(recent as any);
-      }
+      setTotalReferrals(totalCount);
     } catch (error) {
-      console.error('Error in loadReferralData:', error);
+      console.error('Error loading referral data:', error);
+    }
+  };
+
+  const loadRecentCommissions = async () => {
+    if (!profile?.id) return;
+
+    const { data } = await supabase
+      .from('referral_commissions')
+      .select(`
+        id,
+        level,
+        amount,
+        percentage,
+        created_at,
+        from_user:profiles!referral_commissions_from_user_id_fkey(full_name)
+      `)
+      .eq('user_id', profile.id)
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    if (data) {
+      setRecentCommissions(data as any);
     }
   };
 
@@ -182,747 +140,343 @@ export default function ReferralsScreen() {
     }
   };
 
-  const loadTreeData = async () => {
-    if (!profile?.id) {
-      console.log('No profile id, skipping tree load');
-      return;
-    }
-
-    try {
-      console.log('Loading tree for user:', profile.id);
-      const { data: directReferrals, error } = await supabase
-        .from('profiles')
-        .select('id, full_name, phone_number, referral_code, created_at')
-        .eq('referred_by', profile.id);
-
-      if (error) {
-        console.error('Error loading tree data:', error);
-        return;
-      }
-
-      console.log('Direct referrals loaded:', directReferrals?.length || 0);
-
-      if (!directReferrals || directReferrals.length === 0) {
-        console.log('No direct referrals found');
-        setTreeData([]);
-        return;
-      }
-
-      const buildTree = async (userId: string, level: number): Promise<TreeNode[]> => {
-        if (!userId) return [];
-
-        const { data: children, error } = await supabase
-          .from('profiles')
-          .select('id, full_name, phone_number, referral_code, created_at')
-          .eq('referred_by', userId);
-
-        if (error) {
-          console.error('Error building tree:', error);
-          return [];
-        }
-
-        if (!children || children.length === 0) return [];
-
-        const nodes: TreeNode[] = [];
-        for (const child of children) {
-          if (child?.id) {
-            const childNodes = await buildTree(child.id, level + 1);
-            nodes.push({
-              id: child.id,
-              full_name: child.full_name || 'Unknown',
-              phone_number: child.phone_number || '',
-              referral_code: child.referral_code || '',
-              created_at: child.created_at || new Date().toISOString(),
-              level: level,
-              children: childNodes,
-              directReferrals: children.length,
-            });
-          }
-        }
-        return nodes;
-      };
-
-      const tree: TreeNode[] = [];
-      for (const ref of directReferrals) {
-        if (ref?.id) {
-          const children = await buildTree(ref.id, 2);
-          tree.push({
-            id: ref.id,
-            full_name: ref.full_name || 'Unknown',
-            phone_number: ref.phone_number || '',
-            referral_code: ref.referral_code || '',
-            created_at: ref.created_at || new Date().toISOString(),
-            level: 1,
-            children: children,
-            directReferrals: directReferrals.length,
-          });
-        }
-      }
-
-      console.log('Tree built with nodes:', tree.length);
-      setTreeData(tree);
-    } catch (error) {
-      console.error('Error in loadTreeData:', error);
-      setTreeData([]);
-    }
-  };
-
-  const toggleNode = (nodeId: string) => {
-    setExpandedNodes(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(nodeId)) {
-        newSet.delete(nodeId);
-      } else {
-        newSet.add(nodeId);
-      }
-      return newSet;
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
     });
   };
 
-  const renderTreeNode = (node: TreeNode, depth: number = 0) => {
-    const isExpanded = expandedNodes.has(node.id);
-    const hasChildren = node.children.length > 0;
-
+  if (loading) {
     return (
-      <View key={node.id} style={[styles.treeNode, { marginLeft: depth * 20 }]}>
-        <TouchableOpacity
-          style={styles.treeNodeHeader}
-          onPress={() => hasChildren && toggleNode(node.id)}
-          disabled={!hasChildren}
-        >
-          <View style={styles.treeNodeLeft}>
-            {hasChildren && (
-              isExpanded ?
-                <ChevronDown size={16} color="#FFD700" /> :
-                <ChevronRight size={16} color="#FFD700" />
-            )}
-            {!hasChildren && <View style={{ width: 16 }} />}
-
-            <View style={styles.treeAvatar}>
-              <Text style={styles.treeAvatarText}>
-                {node.full_name.charAt(0).toUpperCase()}
-              </Text>
-            </View>
-
-            <View style={styles.treeNodeInfo}>
-              <Text style={styles.treeNodeName}>{node.full_name}</Text>
-              <Text style={styles.treeNodePhone}>{node.phone_number}</Text>
-            </View>
-          </View>
-
-          <View style={styles.treeNodeRight}>
-            {hasChildren && (
-              <View style={styles.childrenBadge}>
-                <Users size={12} color="#FFD700" />
-                <Text style={styles.childrenCount}>{node.children.length}</Text>
-              </View>
-            )}
-            <View style={styles.treeLevelBadge}>
-              <Text style={styles.treeLevelText}>L{node.level}</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
-
-        {isExpanded && node.children.length > 0 && (
-          <View style={styles.treeChildren}>
-            {node.children.map(child => renderTreeNode(child, depth + 1))}
-          </View>
-        )}
-      </View>
-    );
-  };
-
-  const renderTree = () => {
-    console.log('Rendering tree with data length:', treeData.length);
-
-    if (treeData.length === 0) {
-      return (
-        <View style={styles.emptyTree}>
-          <Users size={48} color="#666" />
-          <Text style={styles.emptyTreeText}>No referrals yet</Text>
-          <Text style={styles.emptyTreeSubtext}>Share your referral code to build your team</Text>
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Referrals</Text>
         </View>
-      );
-    }
-
-    return (
-      <View style={styles.treeContainer}>
-        {treeData.map(node => renderTreeNode(node, 0))}
-      </View>
-    );
-  };
-
-  const toggleLevel = (level: number) => {
-    setExpandedLevels(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(level)) {
-        newSet.delete(level);
-      } else {
-        newSet.add(level);
-      }
-      return newSet;
-    });
-  };
-
-  if (!profile) {
-    return (
-      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <Text style={{ color: '#999', fontSize: 16 }}>Loading...</Text>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Loading...</Text>
+        </View>
       </View>
     );
   }
 
   return (
-    <ScrollView style={styles.container}>
+    <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Referrals</Text>
-        <Text style={styles.subtitle}>Track your network and earnings</Text>
+        <Text style={styles.headerTitle}>Referrals</Text>
       </View>
 
-      <View style={styles.referralCodeCard}>
-        <Text style={styles.cardLabel}>Your Referral Code</Text>
-        <View style={styles.codeContainer}>
-          <Text style={styles.code}>{profile.referral_code || 'N/A'}</Text>
-          <TouchableOpacity style={styles.iconButton} onPress={shareReferralCode}>
-            <Copy size={20} color="#FFD700" />
+      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Your Referral Code</Text>
+            <TouchableOpacity onPress={shareReferralCode}>
+              <Copy size={20} color="#F59E0B" />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.referralCode}>{profile?.referral_code}</Text>
+          <TouchableOpacity style={styles.shareButton} onPress={shareReferralCode}>
+            <Text style={styles.shareButtonText}>Share Code</Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity style={styles.shareButton} onPress={shareReferralCode}>
-          <Text style={styles.shareButtonText}>Share Code</Text>
-        </TouchableOpacity>
-      </View>
 
-      <View style={styles.statsCard}>
-        <View style={styles.statItem}>
-          <Users size={24} color="#FFD700" />
-          <Text style={styles.statValue}>
-            {referralsByLevel.reduce((sum, level) => sum + level.count, 0)}
-          </Text>
-          <Text style={styles.statLabel}>Total Referrals</Text>
-        </View>
-        <View style={styles.divider} />
-        <View style={styles.statItem}>
-          <IndianRupee size={24} color="#FFD700" />
-          <Text style={styles.statValue}>₹{totalCommission.toFixed(2)}</Text>
-          <Text style={styles.statLabel}>Total Earned</Text>
-        </View>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Commission Structure</Text>
-        <View style={styles.levelConfigCard}>
-          {levelConfig.map((config) => (
-            <View key={config.level} style={styles.configRow}>
-              <View style={styles.configLeft}>
-                <Text style={styles.configLevel}>Level {config.level}</Text>
-                <Text style={styles.configPercentage}>{config.percentage}%</Text>
-              </View>
-              <Text style={styles.configAmount}>₹{config.amount.toFixed(2)}</Text>
-            </View>
-          ))}
-          <View style={styles.totalConfigRow}>
-            <Text style={styles.totalConfigLabel}>Total</Text>
-            <Text style={styles.totalConfigValue}>
-              ₹{levelConfig.reduce((sum, c) => sum + c.amount, 0).toFixed(2)} (20%)
-            </Text>
+        <View style={styles.statsGrid}>
+          <View style={[styles.statCard, { backgroundColor: '#1E293B' }]}>
+            <Users size={24} color="#3B82F6" />
+            <Text style={styles.statValue}>{totalReferrals}</Text>
+            <Text style={styles.statLabel}>Total Referrals</Text>
+          </View>
+          <View style={[styles.statCard, { backgroundColor: '#1E293B' }]}>
+            <IndianRupee size={24} color="#10B981" />
+            <Text style={styles.statValue}>₹{totalCommission.toFixed(2)}</Text>
+            <Text style={styles.statLabel}>Total Earned</Text>
           </View>
         </View>
-      </View>
 
-      <View style={styles.section}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <View>
-            <Text style={styles.sectionTitle}>My Downline Tree</Text>
-            <Text style={styles.sectionSubtitle}>Tap on any member to expand their downline</Text>
+        <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>View Downline Tree</Text>
           </View>
           <TouchableOpacity
-            style={{ backgroundColor: '#FFD700', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 }}
-            onPress={loadTreeData}
+            style={styles.treeButton}
+            onPress={() => router.push('/tree')}
           >
-            <Text style={{ color: '#000', fontSize: 12, fontWeight: '600' }}>Refresh</Text>
+            <Text style={styles.treeButtonText}>Open Tree View</Text>
+            <TrendingUp size={20} color="#FFF" />
           </TouchableOpacity>
         </View>
 
-        <View style={{ backgroundColor: '#2a2a2a', padding: 12, borderRadius: 8, marginBottom: 12 }}>
-          <Text style={{ color: '#FFD700', fontSize: 12, marginBottom: 4 }}>Debug Info:</Text>
-          <Text style={{ color: '#fff', fontSize: 11 }}>Profile ID: {profile?.id || 'null'}</Text>
-          <Text style={{ color: '#fff', fontSize: 11 }}>Tree Data Length: {treeData.length}</Text>
-          <Text style={{ color: '#fff', fontSize: 11 }}>Loading: {loading ? 'Yes' : 'No'}</Text>
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Referral Levels</Text>
+          <Text style={styles.cardSubtitle}>Commission breakdown by level</Text>
+
+          {referralsByLevel.map((data) => {
+            const config = levelConfig.find(c => c.level === data.level);
+            return (
+              <View key={data.level} style={styles.levelRow}>
+                <View style={styles.levelInfo}>
+                  <View style={styles.levelBadge}>
+                    <Text style={styles.levelBadgeText}>L{data.level}</Text>
+                  </View>
+                  <View style={styles.levelDetails}>
+                    <Text style={styles.levelText}>Level {data.level}</Text>
+                    <Text style={styles.levelSubtext}>
+                      {data.count} referral{data.count !== 1 ? 's' : ''} • {config?.percentage || 0}%
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.levelAmount}>₹{data.commission.toFixed(2)}</Text>
+              </View>
+            );
+          })}
+
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Total</Text>
+            <Text style={styles.totalAmount}>₹{totalCommission.toFixed(2)} (20%)</Text>
+          </View>
         </View>
 
-        {renderTree()}
-      </View>
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Recent Commissions</Text>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Recent Commissions</Text>
-        {recentCommissions.length === 0 ? (
-          <View style={styles.emptyState}>
-            <TrendingUp size={48} color="#666" />
-            <Text style={styles.emptyText}>No commissions yet</Text>
-            <Text style={styles.emptySubtext}>Share your referral code to start earning</Text>
-          </View>
-        ) : (
-          recentCommissions.map((commission) => (
-            <View key={commission.id} style={styles.commissionCard}>
-              <View style={styles.commissionHeader}>
-                <View>
-                  <Text style={styles.commissionFrom}>{commission.from_user.full_name}</Text>
+          {recentCommissions.length === 0 ? (
+            <View style={styles.emptyState}>
+              <TrendingUp size={48} color="#475569" />
+              <Text style={styles.emptyStateTitle}>No commissions yet</Text>
+              <Text style={styles.emptyStateText}>Share your referral code to start earning</Text>
+            </View>
+          ) : (
+            recentCommissions.map((commission) => (
+              <View key={commission.id} style={styles.commissionRow}>
+                <View style={styles.commissionInfo}>
+                  <Text style={styles.commissionName}>{commission.from_user.full_name}</Text>
                   <Text style={styles.commissionDate}>
-                    {new Date(commission.created_at).toLocaleDateString()}
+                    Level {commission.level} • {formatDate(commission.created_at)}
                   </Text>
                 </View>
-                <View style={styles.commissionRight}>
-                  <Text style={styles.commissionAmount}>+₹{commission.amount.toFixed(2)}</Text>
-                  <Text style={styles.commissionLevel}>Level {commission.level}</Text>
-                </View>
+                <Text style={styles.commissionAmount}>+₹{commission.amount.toFixed(2)}</Text>
               </View>
-            </View>
-          ))
-        )}
-      </View>
-    </ScrollView>
+            ))
+          )}
+        </View>
+
+        <View style={{ height: 100 }} />
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
+    backgroundColor: '#0F172A',
   },
   header: {
-    padding: 24,
+    paddingHorizontal: 20,
     paddingTop: 60,
+    paddingBottom: 20,
+    backgroundColor: '#1E293B',
   },
-  title: {
-    fontSize: 32,
+  headerTitle: {
+    fontSize: 28,
     fontWeight: 'bold',
-    color: '#fff',
+    color: '#FFF',
   },
-  subtitle: {
-    fontSize: 16,
-    color: '#999',
-    marginTop: 4,
-  },
-  sectionSubtitle: {
-    fontSize: 14,
-    color: '#999',
-    marginBottom: 16,
-    marginTop: -8,
-  },
-  referralCodeCard: {
-    backgroundColor: '#2a2a2a',
-    margin: 16,
+  content: {
+    flex: 1,
     padding: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#FFD700',
   },
-  cardLabel: {
-    fontSize: 14,
-    color: '#999',
-    marginBottom: 12,
-  },
-  codeContainer: {
-    flexDirection: 'row',
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
+  },
+  loadingText: {
+    color: '#94A3B8',
+    fontSize: 16,
+  },
+  card: {
+    backgroundColor: '#1E293B',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+  },
+  cardHeader: {
+    flexDirection: 'row',
     justifyContent: 'space-between',
-    backgroundColor: '#1a1a1a',
-    padding: 16,
-    borderRadius: 12,
+    alignItems: 'center',
     marginBottom: 16,
   },
-  code: {
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#FFF',
+    marginBottom: 8,
+  },
+  cardSubtitle: {
+    fontSize: 14,
+    color: '#94A3B8',
+    marginBottom: 20,
+  },
+  referralCode: {
     fontSize: 32,
     fontWeight: 'bold',
-    color: '#FFD700',
-    letterSpacing: 4,
-  },
-  iconButton: {
-    padding: 8,
+    color: '#F59E0B',
+    textAlign: 'center',
+    marginVertical: 20,
+    letterSpacing: 2,
   },
   shareButton: {
-    backgroundColor: '#FFD700',
-    padding: 14,
-    borderRadius: 8,
+    backgroundColor: '#F59E0B',
+    paddingVertical: 14,
+    borderRadius: 12,
     alignItems: 'center',
   },
   shareButtonText: {
-    color: '#1a1a1a',
+    color: '#FFF',
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
-  statsCard: {
-    backgroundColor: '#2a2a2a',
-    marginHorizontal: 16,
-    marginBottom: 16,
-    padding: 20,
-    borderRadius: 12,
+  statsGrid: {
     flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: '#333',
+    gap: 12,
+    marginBottom: 20,
   },
-  statItem: {
+  statCard: {
     flex: 1,
+    padding: 20,
+    borderRadius: 16,
     alignItems: 'center',
   },
   statValue: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#FFD700',
-    marginTop: 8,
+    color: '#FFF',
+    marginTop: 12,
     marginBottom: 4,
   },
   statLabel: {
-    fontSize: 14,
-    color: '#999',
-  },
-  divider: {
-    width: 1,
-    backgroundColor: '#333',
-    marginHorizontal: 16,
-  },
-  section: {
-    padding: 16,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 16,
-  },
-  levelConfigCard: {
-    backgroundColor: '#2a2a2a',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  configRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  configLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  configLevel: {
-    fontSize: 16,
-    color: '#fff',
-    width: 70,
-  },
-  configPercentage: {
-    fontSize: 16,
-    color: '#999',
-    width: 70,
-  },
-  configAmount: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#FFD700',
-  },
-  totalConfigRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 12,
-    marginTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#333',
-  },
-  totalConfigLabel: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  totalConfigValue: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#FFD700',
-  },
-  levelCard: {
-    backgroundColor: '#2a2a2a',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  levelHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  levelHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  levelHeaderRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  levelNumber: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#FFD700',
-  },
-  levelPercentage: {
-    fontSize: 14,
-    color: '#999',
-  },
-  levelCount: {
-    fontSize: 14,
-    color: '#999',
-  },
-  levelStats: {
-    flexDirection: 'row',
-    gap: 24,
-  },
-  levelStat: {
-    flex: 1,
-  },
-  levelStatLabel: {
-    fontSize: 14,
-    color: '#999',
-    marginBottom: 4,
-  },
-  levelStatValue: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  emptyState: {
-    backgroundColor: '#2a2a2a',
-    borderRadius: 12,
-    padding: 48,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  emptyText: {
-    fontSize: 18,
-    color: '#fff',
-    marginTop: 16,
-    marginBottom: 4,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: '#999',
+    fontSize: 12,
+    color: '#94A3B8',
     textAlign: 'center',
   },
-  commissionCard: {
-    backgroundColor: '#2a2a2a',
+  treeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#3B82F6',
+    paddingVertical: 16,
     borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#333',
+    gap: 8,
   },
-  commissionHeader: {
+  treeButtonText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  levelRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
   },
-  commissionFrom: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 4,
-  },
-  commissionDate: {
-    fontSize: 12,
-    color: '#999',
-  },
-  commissionRight: {
-    alignItems: 'flex-end',
-  },
-  commissionAmount: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#4ade80',
-    marginBottom: 4,
-  },
-  commissionLevel: {
-    fontSize: 12,
-    color: '#999',
-  },
-  usersList: {
-    marginTop: 16,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#333',
-  },
-  usersListHeader: {
-    marginBottom: 12,
-  },
-  usersListTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFD700',
-    textTransform: 'uppercase',
-  },
-  userItem: {
+  levelInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 8,
-    marginBottom: 8,
     gap: 12,
   },
-  userAvatar: {
+  levelBadge: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#FFD700',
-    alignItems: 'center',
+    backgroundColor: '#334155',
     justifyContent: 'center',
-  },
-  userAvatarText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1a1a1a',
-  },
-  userInfo: {
-    flex: 1,
-  },
-  userName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 2,
-  },
-  userPhone: {
-    fontSize: 14,
-    color: '#999',
-    marginBottom: 2,
-  },
-  userDate: {
-    fontSize: 12,
-    color: '#666',
-  },
-  userCodeBadge: {
-    backgroundColor: '#333',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  userCode: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#FFD700',
-  },
-  treeContainer: {
-    backgroundColor: '#2a2a2a',
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  treeNode: {
-    marginBottom: 8,
-  },
-  treeNodeHeader: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#1a1a1a',
-    padding: 12,
-    borderRadius: 8,
-    borderLeftWidth: 3,
-    borderLeftColor: '#FFD700',
   },
-  treeNodeLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flex: 1,
-  },
-  treeAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#FFD700',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  treeAvatarText: {
+  levelBadgeText: {
+    color: '#F59E0B',
     fontSize: 14,
     fontWeight: 'bold',
-    color: '#1a1a1a',
   },
-  treeNodeInfo: {
-    flex: 1,
-  },
-  treeNodeName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 2,
-  },
-  treeNodePhone: {
-    fontSize: 12,
-    color: '#999',
-  },
-  treeNodeRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  childrenBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#333',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+  levelDetails: {
     gap: 4,
   },
-  childrenCount: {
-    fontSize: 12,
+  levelText: {
+    color: '#FFF',
+    fontSize: 16,
     fontWeight: '600',
-    color: '#FFD700',
   },
-  treeLevelBadge: {
-    backgroundColor: '#FFD700',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  treeLevelText: {
+  levelSubtext: {
+    color: '#94A3B8',
     fontSize: 12,
+  },
+  levelAmount: {
+    color: '#10B981',
+    fontSize: 16,
     fontWeight: 'bold',
-    color: '#1a1a1a',
   },
-  treeChildren: {
-    marginTop: 8,
-    marginLeft: 8,
-    borderLeftWidth: 2,
-    borderLeftColor: '#333',
-    paddingLeft: 8,
-  },
-  emptyTree: {
-    backgroundColor: '#2a2a2a',
-    borderRadius: 12,
-    padding: 48,
+  totalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#333',
+    paddingTop: 16,
+    marginTop: 8,
+    borderTopWidth: 2,
+    borderTopColor: '#F59E0B',
   },
-  emptyTreeText: {
+  totalLabel: {
+    color: '#FFF',
     fontSize: 18,
-    color: '#fff',
+    fontWeight: 'bold',
+  },
+  totalAmount: {
+    color: '#F59E0B',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyStateTitle: {
+    color: '#FFF',
+    fontSize: 18,
+    fontWeight: '600',
     marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyStateText: {
+    color: '#94A3B8',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  commissionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#334155',
+  },
+  commissionInfo: {
+    flex: 1,
+  },
+  commissionName: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '600',
     marginBottom: 4,
   },
-  emptyTreeSubtext: {
-    fontSize: 14,
-    color: '#999',
-    textAlign: 'center',
+  commissionDate: {
+    color: '#94A3B8',
+    fontSize: 12,
+  },
+  commissionAmount: {
+    color: '#10B981',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });
