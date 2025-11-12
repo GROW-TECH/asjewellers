@@ -19,11 +19,15 @@ const handleLogin = async () => {
     return;
   }
   setLoading(true);
+  console.log('Attempting login with phone:', phone);
   const result = await signInWithPassword(phone, password);
+  console.log('Login result:', result);
   setLoading(false);
   if (result.error) {
-    Alert.alert('Error', result.error);
+    console.error('Login error:', result.error);
+    Alert.alert('Login Failed', result.error);
   } else {
+    console.log('Login successful, redirecting...');
     router.replace('/(tabs)');
   }
 };
