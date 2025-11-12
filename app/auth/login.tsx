@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 
@@ -7,15 +7,17 @@ export default function Login() {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const { signInWithPassword } = useAuth();
 
 const handleLogin = async () => {
+  setError('');
   if (!phone || phone.length < 6) {
-    Alert.alert('Error', 'Enter phone number');
+    setError('Enter phone number');
     return;
   }
   if (!password) {
-    Alert.alert('Error', 'Enter password');
+    setError('Enter password');
     return;
   }
   setLoading(true);
@@ -25,7 +27,7 @@ const handleLogin = async () => {
   setLoading(false);
   if (result.error) {
     console.error('Login error:', result.error);
-    Alert.alert('Login Failed', result.error);
+    setError(result.error);
   } else {
     console.log('Login successful, redirecting...');
     router.replace('/(tabs)');
@@ -37,6 +39,12 @@ const handleLogin = async () => {
       <View style={styles.content}>
         <Text style={styles.title}>A S JEWELLERS</Text>
         <Text style={styles.subtitle}>Sign in to your account</Text>
+
+        {error ? (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        ) : null}
 
         <View style={styles.inputContainer}>
           <Text style={styles.label}>Phone Number</Text>
@@ -108,6 +116,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#999',
     marginBottom: 48,
+    textAlign: 'center',
+  },
+  errorContainer: {
+    backgroundColor: '#ff4444',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 24,
+  },
+  errorText: {
+    color: '#fff',
+    fontSize: 14,
     textAlign: 'center',
   },
   inputContainer: {
