@@ -56,14 +56,23 @@ export default function ReferralsScreen() {
   const [expandedLevels, setExpandedLevels] = useState<Set<number>>(new Set());
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (profile) {
-      loadReferralData();
-      loadLevelConfig();
-      loadTreeData();
-    }
-  }, [profile]);
+    const loadData = async () => {
+      if (profile?.id) {
+        setLoading(true);
+        await Promise.all([
+          loadReferralData(),
+          loadLevelConfig(),
+          loadTreeData()
+        ]);
+        setLoading(false);
+      }
+    };
+
+    loadData();
+  }, [profile?.id]);
 
   const loadLevelConfig = async () => {
     const { data } = await supabase
@@ -77,76 +86,92 @@ export default function ReferralsScreen() {
   };
 
   const loadReferralData = async () => {
-    if (!profile) return;
+    if (!profile?.id) return;
 
-    const levelData: ReferralData[] = [];
-    let total = 0;
+    try {
+      const levelData: ReferralData[] = [];
+      let total = 0;
 
-    for (let level = 1; level <= 10; level++) {
-      const { data: referrals } = await supabase
-        .from('referral_tree')
+      for (let level = 1; level <= 10; level++) {
+        const { data: referrals, error: refError } = await supabase
+          .from('referral_tree')
+          .select(`
+            referred_user_id,
+            profiles:profiles!referral_tree_referred_user_id_fkey(
+              id,
+              full_name,
+              phone_number,
+              referral_code,
+              created_at
+            )
+          `)
+          .eq('user_id', profile.id)
+          .eq('level', level);
+
+        if (refError) {
+          console.error('Error loading referrals:', refError);
+        }
+
+        const { data: commissions, error: commError } = await supabase
+          .from('referral_commissions')
+          .select('amount')
+          .eq('user_id', profile.id)
+          .eq('level', level);
+
+        if (commError) {
+          console.error('Error loading commissions:', commError);
+        }
+
+        const levelCommission = commissions?.reduce((sum, c) => sum + parseFloat(c.amount.toString()), 0) || 0;
+        total += levelCommission;
+
+        const users: ReferralUser[] = referrals?.map((r: any) => ({
+          id: r.profiles?.id || '',
+          full_name: r.profiles?.full_name || 'Unknown',
+          phone_number: r.profiles?.phone_number || '',
+          referral_code: r.profiles?.referral_code || '',
+          created_at: r.profiles?.created_at || new Date().toISOString(),
+        })).filter((u: ReferralUser) => u.id) || [];
+
+        levelData.push({
+          level,
+          count: referrals?.length || 0,
+          commission: levelCommission,
+          users,
+        });
+      }
+
+      setReferralsByLevel(levelData);
+      setTotalCommission(total);
+
+      const { data: recent, error: recentError } = await supabase
+        .from('referral_commissions')
         .select(`
-          referred_user_id,
-          profiles:profiles!referral_tree_referred_user_id_fkey(
-            id,
-            full_name,
-            phone_number,
-            referral_code,
-            created_at
-          )
+          id,
+          level,
+          amount,
+          percentage,
+          created_at,
+          from_user:profiles!referral_commissions_from_user_id_fkey(full_name)
         `)
         .eq('user_id', profile.id)
-        .eq('level', level);
+        .order('created_at', { ascending: false })
+        .limit(10);
 
-      const { data: commissions } = await supabase
-        .from('referral_commissions')
-        .select('amount')
-        .eq('user_id', profile.id)
-        .eq('level', level);
+      if (recentError) {
+        console.error('Error loading recent commissions:', recentError);
+      }
 
-      const levelCommission = commissions?.reduce((sum, c) => sum + parseFloat(c.amount.toString()), 0) || 0;
-      total += levelCommission;
-
-      const users: ReferralUser[] = referrals?.map((r: any) => ({
-        id: r.profiles.id,
-        full_name: r.profiles.full_name,
-        phone_number: r.profiles.phone_number,
-        referral_code: r.profiles.referral_code,
-        created_at: r.profiles.created_at,
-      })) || [];
-
-      levelData.push({
-        level,
-        count: referrals?.length || 0,
-        commission: levelCommission,
-        users,
-      });
-    }
-
-    setReferralsByLevel(levelData);
-    setTotalCommission(total);
-
-    const { data: recent } = await supabase
-      .from('referral_commissions')
-      .select(`
-        id,
-        level,
-        amount,
-        percentage,
-        created_at,
-        from_user:profiles!referral_commissions_from_user_id_fkey(full_name)
-      `)
-      .eq('user_id', profile.id)
-      .order('created_at', { ascending: false })
-      .limit(10);
-
-    if (recent) {
-      setRecentCommissions(recent as any);
+      if (recent) {
+        setRecentCommissions(recent as any);
+      }
+    } catch (error) {
+      console.error('Error in loadReferralData:', error);
     }
   };
 
   const shareReferralCode = async () => {
-    if (!profile) return;
+    if (!profile?.referral_code) return;
 
     try {
       await Share.share({
@@ -158,56 +183,80 @@ export default function ReferralsScreen() {
   };
 
   const loadTreeData = async () => {
-    if (!profile) return;
+    if (!profile?.id) return;
 
-    const { data: directReferrals } = await supabase
-      .from('profiles')
-      .select('id, full_name, phone_number, referral_code, created_at')
-      .eq('referred_by', profile.id);
-
-    if (!directReferrals) return;
-
-    const buildTree = async (userId: string, level: number): Promise<TreeNode[]> => {
-      const { data: children } = await supabase
+    try {
+      const { data: directReferrals, error } = await supabase
         .from('profiles')
         .select('id, full_name, phone_number, referral_code, created_at')
-        .eq('referred_by', userId);
+        .eq('referred_by', profile.id);
 
-      if (!children || children.length === 0) return [];
-
-      const nodes: TreeNode[] = [];
-      for (const child of children) {
-        const childNodes = await buildTree(child.id, level + 1);
-        nodes.push({
-          id: child.id,
-          full_name: child.full_name,
-          phone_number: child.phone_number,
-          referral_code: child.referral_code,
-          created_at: child.created_at,
-          level: level,
-          children: childNodes,
-          directReferrals: children.length,
-        });
+      if (error) {
+        console.error('Error loading tree data:', error);
+        return;
       }
-      return nodes;
-    };
 
-    const tree: TreeNode[] = [];
-    for (const ref of directReferrals) {
-      const children = await buildTree(ref.id, 2);
-      tree.push({
-        id: ref.id,
-        full_name: ref.full_name,
-        phone_number: ref.phone_number,
-        referral_code: ref.referral_code,
-        created_at: ref.created_at,
-        level: 1,
-        children: children,
-        directReferrals: directReferrals.length,
-      });
+      if (!directReferrals || directReferrals.length === 0) {
+        setTreeData([]);
+        return;
+      }
+
+      const buildTree = async (userId: string, level: number): Promise<TreeNode[]> => {
+        if (!userId) return [];
+
+        const { data: children, error } = await supabase
+          .from('profiles')
+          .select('id, full_name, phone_number, referral_code, created_at')
+          .eq('referred_by', userId);
+
+        if (error) {
+          console.error('Error building tree:', error);
+          return [];
+        }
+
+        if (!children || children.length === 0) return [];
+
+        const nodes: TreeNode[] = [];
+        for (const child of children) {
+          if (child?.id) {
+            const childNodes = await buildTree(child.id, level + 1);
+            nodes.push({
+              id: child.id,
+              full_name: child.full_name || 'Unknown',
+              phone_number: child.phone_number || '',
+              referral_code: child.referral_code || '',
+              created_at: child.created_at || new Date().toISOString(),
+              level: level,
+              children: childNodes,
+              directReferrals: children.length,
+            });
+          }
+        }
+        return nodes;
+      };
+
+      const tree: TreeNode[] = [];
+      for (const ref of directReferrals) {
+        if (ref?.id) {
+          const children = await buildTree(ref.id, 2);
+          tree.push({
+            id: ref.id,
+            full_name: ref.full_name || 'Unknown',
+            phone_number: ref.phone_number || '',
+            referral_code: ref.referral_code || '',
+            created_at: ref.created_at || new Date().toISOString(),
+            level: 1,
+            children: children,
+            directReferrals: directReferrals.length,
+          });
+        }
+      }
+
+      setTreeData(tree);
+    } catch (error) {
+      console.error('Error in loadTreeData:', error);
+      setTreeData([]);
     }
-
-    setTreeData(tree);
   };
 
   const toggleNode = (nodeId: string) => {
@@ -305,6 +354,14 @@ export default function ReferralsScreen() {
     });
   };
 
+  if (!profile) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <Text style={{ color: '#999', fontSize: 16 }}>Loading...</Text>
+      </View>
+    );
+  }
+
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
@@ -315,7 +372,7 @@ export default function ReferralsScreen() {
       <View style={styles.referralCodeCard}>
         <Text style={styles.cardLabel}>Your Referral Code</Text>
         <View style={styles.codeContainer}>
-          <Text style={styles.code}>{profile?.referral_code}</Text>
+          <Text style={styles.code}>{profile.referral_code || 'N/A'}</Text>
           <TouchableOpacity style={styles.iconButton} onPress={shareReferralCode}>
             <Copy size={20} color="#FFD700" />
           </TouchableOpacity>
