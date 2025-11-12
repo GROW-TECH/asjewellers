@@ -19,6 +19,17 @@ interface ReferralUser {
   referral_code: string;
 }
 
+interface TreeNode {
+  id: string;
+  full_name: string;
+  phone_number: string;
+  referral_code: string;
+  created_at: string;
+  level: number;
+  children: TreeNode[];
+  directReferrals: number;
+}
+
 interface Commission {
   id: string;
   level: number;
@@ -43,11 +54,16 @@ export default function ReferralsScreen() {
   const [levelConfig, setLevelConfig] = useState<LevelConfig[]>([]);
   const [totalCommission, setTotalCommission] = useState(0);
   const [expandedLevels, setExpandedLevels] = useState<Set<number>>(new Set());
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  const [treeData, setTreeData] = useState<TreeNode[]>([]);
 
   useEffect(() => {
-    loadReferralData();
-    loadLevelConfig();
-  }, []);
+    if (profile) {
+      loadReferralData();
+      loadLevelConfig();
+      loadTreeData();
+    }
+  }, [profile]);
 
   const loadLevelConfig = async () => {
     const { data } = await supabase
@@ -141,6 +157,142 @@ export default function ReferralsScreen() {
     }
   };
 
+  const loadTreeData = async () => {
+    if (!profile) return;
+
+    const { data: directReferrals } = await supabase
+      .from('profiles')
+      .select('id, full_name, phone_number, referral_code, created_at')
+      .eq('referred_by', profile.id);
+
+    if (!directReferrals) return;
+
+    const buildTree = async (userId: string, level: number): Promise<TreeNode[]> => {
+      const { data: children } = await supabase
+        .from('profiles')
+        .select('id, full_name, phone_number, referral_code, created_at')
+        .eq('referred_by', userId);
+
+      if (!children || children.length === 0) return [];
+
+      const nodes: TreeNode[] = [];
+      for (const child of children) {
+        const childNodes = await buildTree(child.id, level + 1);
+        nodes.push({
+          id: child.id,
+          full_name: child.full_name,
+          phone_number: child.phone_number,
+          referral_code: child.referral_code,
+          created_at: child.created_at,
+          level: level,
+          children: childNodes,
+          directReferrals: children.length,
+        });
+      }
+      return nodes;
+    };
+
+    const tree: TreeNode[] = [];
+    for (const ref of directReferrals) {
+      const children = await buildTree(ref.id, 2);
+      tree.push({
+        id: ref.id,
+        full_name: ref.full_name,
+        phone_number: ref.phone_number,
+        referral_code: ref.referral_code,
+        created_at: ref.created_at,
+        level: 1,
+        children: children,
+        directReferrals: directReferrals.length,
+      });
+    }
+
+    setTreeData(tree);
+  };
+
+  const toggleNode = (nodeId: string) => {
+    setExpandedNodes(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(nodeId)) {
+        newSet.delete(nodeId);
+      } else {
+        newSet.add(nodeId);
+      }
+      return newSet;
+    });
+  };
+
+  const renderTreeNode = (node: TreeNode, depth: number = 0) => {
+    const isExpanded = expandedNodes.has(node.id);
+    const hasChildren = node.children.length > 0;
+
+    return (
+      <View key={node.id} style={[styles.treeNode, { marginLeft: depth * 20 }]}>
+        <TouchableOpacity
+          style={styles.treeNodeHeader}
+          onPress={() => hasChildren && toggleNode(node.id)}
+          disabled={!hasChildren}
+        >
+          <View style={styles.treeNodeLeft}>
+            {hasChildren && (
+              isExpanded ?
+                <ChevronDown size={16} color="#FFD700" /> :
+                <ChevronRight size={16} color="#FFD700" />
+            )}
+            {!hasChildren && <View style={{ width: 16 }} />}
+
+            <View style={styles.treeAvatar}>
+              <Text style={styles.treeAvatarText}>
+                {node.full_name.charAt(0).toUpperCase()}
+              </Text>
+            </View>
+
+            <View style={styles.treeNodeInfo}>
+              <Text style={styles.treeNodeName}>{node.full_name}</Text>
+              <Text style={styles.treeNodePhone}>{node.phone_number}</Text>
+            </View>
+          </View>
+
+          <View style={styles.treeNodeRight}>
+            {hasChildren && (
+              <View style={styles.childrenBadge}>
+                <Users size={12} color="#FFD700" />
+                <Text style={styles.childrenCount}>{node.children.length}</Text>
+              </View>
+            )}
+            <View style={styles.treeLevelBadge}>
+              <Text style={styles.treeLevelText}>L{node.level}</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+
+        {isExpanded && node.children.length > 0 && (
+          <View style={styles.treeChildren}>
+            {node.children.map(child => renderTreeNode(child, depth + 1))}
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const renderTree = () => {
+    if (treeData.length === 0) {
+      return (
+        <View style={styles.emptyTree}>
+          <Users size={48} color="#666" />
+          <Text style={styles.emptyTreeText}>No referrals yet</Text>
+          <Text style={styles.emptyTreeSubtext}>Share your referral code to build your team</Text>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.treeContainer}>
+        {treeData.map(node => renderTreeNode(node, 0))}
+      </View>
+    );
+  };
+
   const toggleLevel = (level: number) => {
     setExpandedLevels(prev => {
       const newSet = new Set(prev);
@@ -211,73 +363,9 @@ export default function ReferralsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Referral Structure</Text>
-        {referralsByLevel.map((data) => {
-          const config = levelConfig.find(c => c.level === data.level);
-          const isExpanded = expandedLevels.has(data.level);
-          return (
-            <View key={data.level} style={styles.levelCard}>
-              <TouchableOpacity
-                style={styles.levelHeader}
-                onPress={() => toggleLevel(data.level)}
-                disabled={data.count === 0}
-              >
-                <View style={styles.levelHeaderLeft}>
-                  <Text style={styles.levelNumber}>Level {data.level}</Text>
-                  {config && (
-                    <Text style={styles.levelPercentage}>{config.percentage}%</Text>
-                  )}
-                </View>
-                <View style={styles.levelHeaderRight}>
-                  <Text style={styles.levelCount}>{data.count} users</Text>
-                  {data.count > 0 && (
-                    isExpanded ?
-                      <ChevronDown size={20} color="#FFD700" /> :
-                      <ChevronRight size={20} color="#FFD700" />
-                  )}
-                </View>
-              </TouchableOpacity>
-
-              <View style={styles.levelStats}>
-                <View style={styles.levelStat}>
-                  <Text style={styles.levelStatLabel}>Referrals</Text>
-                  <Text style={styles.levelStatValue}>{data.count}</Text>
-                </View>
-                <View style={styles.levelStat}>
-                  <Text style={styles.levelStatLabel}>Earned</Text>
-                  <Text style={styles.levelStatValue}>₹{data.commission.toFixed(2)}</Text>
-                </View>
-              </View>
-
-              {isExpanded && data.users.length > 0 && (
-                <View style={styles.usersList}>
-                  <View style={styles.usersListHeader}>
-                    <Text style={styles.usersListTitle}>Team Members</Text>
-                  </View>
-                  {data.users.map((user) => (
-                    <View key={user.id} style={styles.userItem}>
-                      <View style={styles.userAvatar}>
-                        <Text style={styles.userAvatarText}>
-                          {user.full_name.charAt(0).toUpperCase()}
-                        </Text>
-                      </View>
-                      <View style={styles.userInfo}>
-                        <Text style={styles.userName}>{user.full_name}</Text>
-                        <Text style={styles.userPhone}>{user.phone_number}</Text>
-                        <Text style={styles.userDate}>
-                          Joined: {new Date(user.created_at).toLocaleDateString()}
-                        </Text>
-                      </View>
-                      <View style={styles.userCodeBadge}>
-                        <Text style={styles.userCode}>{user.referral_code}</Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              )}
-            </View>
-          );
-        })}
+        <Text style={styles.sectionTitle}>My Downline Tree</Text>
+        <Text style={styles.sectionSubtitle}>Tap on any member to expand their downline</Text>
+        {renderTree()}
       </View>
 
       <View style={styles.section}>
@@ -329,6 +417,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#999',
     marginTop: 4,
+  },
+  sectionSubtitle: {
+    fontSize: 14,
+    color: '#999',
+    marginBottom: 16,
+    marginTop: -8,
   },
   referralCodeCard: {
     backgroundColor: '#2a2a2a',
@@ -637,5 +731,113 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#FFD700',
+  },
+  treeContainer: {
+    backgroundColor: '#2a2a2a',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  treeNode: {
+    marginBottom: 8,
+  },
+  treeNodeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#1a1a1a',
+    padding: 12,
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#FFD700',
+  },
+  treeNodeLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  treeAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FFD700',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  treeAvatarText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+  },
+  treeNodeInfo: {
+    flex: 1,
+  },
+  treeNodeName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
+    marginBottom: 2,
+  },
+  treeNodePhone: {
+    fontSize: 12,
+    color: '#999',
+  },
+  treeNodeRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  childrenBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#333',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
+  },
+  childrenCount: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFD700',
+  },
+  treeLevelBadge: {
+    backgroundColor: '#FFD700',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  treeLevelText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+  },
+  treeChildren: {
+    marginTop: 8,
+    marginLeft: 8,
+    borderLeftWidth: 2,
+    borderLeftColor: '#333',
+    paddingLeft: 8,
+  },
+  emptyTree: {
+    backgroundColor: '#2a2a2a',
+    borderRadius: 12,
+    padding: 48,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  emptyTreeText: {
+    fontSize: 18,
+    color: '#fff',
+    marginTop: 16,
+    marginBottom: 4,
+  },
+  emptyTreeSubtext: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
   },
 });
