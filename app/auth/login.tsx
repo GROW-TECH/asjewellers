@@ -40,6 +40,13 @@ const handleLogin = async () => {
         <Text style={styles.title}>A S JEWELLERS</Text>
         <Text style={styles.subtitle}>Sign in to your account</Text>
 
+        <View style={styles.debugContainer}>
+          <Text style={styles.debugText}>Phone: {phone}</Text>
+          <Text style={styles.debugText}>Password: {password.length} chars</Text>
+          <Text style={styles.debugText}>Loading: {loading ? 'Yes' : 'No'}</Text>
+          {error ? <Text style={styles.debugText}>Error: {error}</Text> : null}
+        </View>
+
         {error ? (
           <View style={styles.errorContainer}>
             <Text style={styles.errorText}>{error}</Text>
@@ -128,6 +135,17 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     textAlign: 'center',
+  },
+  debugContainer: {
+    backgroundColor: '#333',
+    padding: 12,
+    marginBottom: 24,
+    borderRadius: 8,
+  },
+  debugText: {
+    color: '#FFD700',
+    fontSize: 12,
+    marginBottom: 4,
   },
   inputContainer: {
     marginBottom: 24,
