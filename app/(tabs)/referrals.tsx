@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Share } from 'react-native';
-import { Users, Copy, TrendingUp, IndianRupee } from 'lucide-react-native';
+import { Users, Copy, TrendingUp, IndianRupee, ChevronDown, ChevronRight } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 
@@ -8,6 +8,15 @@ interface ReferralData {
   level: number;
   count: number;
   commission: number;
+  users: ReferralUser[];
+}
+
+interface ReferralUser {
+  id: string;
+  full_name: string;
+  phone_number: string;
+  created_at: string;
+  referral_code: string;
 }
 
 interface Commission {
@@ -33,6 +42,7 @@ export default function ReferralsScreen() {
   const [recentCommissions, setRecentCommissions] = useState<Commission[]>([]);
   const [levelConfig, setLevelConfig] = useState<LevelConfig[]>([]);
   const [totalCommission, setTotalCommission] = useState(0);
+  const [expandedLevels, setExpandedLevels] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     loadReferralData();
@@ -59,7 +69,16 @@ export default function ReferralsScreen() {
     for (let level = 1; level <= 10; level++) {
       const { data: referrals } = await supabase
         .from('referral_tree')
-        .select('*')
+        .select(`
+          referred_user_id,
+          profiles:profiles!referral_tree_referred_user_id_fkey(
+            id,
+            full_name,
+            phone_number,
+            referral_code,
+            created_at
+          )
+        `)
         .eq('user_id', profile.id)
         .eq('level', level);
 
@@ -72,10 +91,19 @@ export default function ReferralsScreen() {
       const levelCommission = commissions?.reduce((sum, c) => sum + parseFloat(c.amount.toString()), 0) || 0;
       total += levelCommission;
 
+      const users: ReferralUser[] = referrals?.map((r: any) => ({
+        id: r.profiles.id,
+        full_name: r.profiles.full_name,
+        phone_number: r.profiles.phone_number,
+        referral_code: r.profiles.referral_code,
+        created_at: r.profiles.created_at,
+      })) || [];
+
       levelData.push({
         level,
         count: referrals?.length || 0,
         commission: levelCommission,
+        users,
       });
     }
 
@@ -111,6 +139,18 @@ export default function ReferralsScreen() {
     } catch (error) {
       console.error('Error sharing:', error);
     }
+  };
+
+  const toggleLevel = (level: number) => {
+    setExpandedLevels(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(level)) {
+        newSet.delete(level);
+      } else {
+        newSet.add(level);
+      }
+      return newSet;
+    });
   };
 
   return (
@@ -171,17 +211,33 @@ export default function ReferralsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Referrals by Level</Text>
+        <Text style={styles.sectionTitle}>Referral Structure</Text>
         {referralsByLevel.map((data) => {
           const config = levelConfig.find(c => c.level === data.level);
+          const isExpanded = expandedLevels.has(data.level);
           return (
             <View key={data.level} style={styles.levelCard}>
-              <View style={styles.levelHeader}>
-                <Text style={styles.levelNumber}>Level {data.level}</Text>
-                {config && (
-                  <Text style={styles.levelPercentage}>{config.percentage}%</Text>
-                )}
-              </View>
+              <TouchableOpacity
+                style={styles.levelHeader}
+                onPress={() => toggleLevel(data.level)}
+                disabled={data.count === 0}
+              >
+                <View style={styles.levelHeaderLeft}>
+                  <Text style={styles.levelNumber}>Level {data.level}</Text>
+                  {config && (
+                    <Text style={styles.levelPercentage}>{config.percentage}%</Text>
+                  )}
+                </View>
+                <View style={styles.levelHeaderRight}>
+                  <Text style={styles.levelCount}>{data.count} users</Text>
+                  {data.count > 0 && (
+                    isExpanded ?
+                      <ChevronDown size={20} color="#FFD700" /> :
+                      <ChevronRight size={20} color="#FFD700" />
+                  )}
+                </View>
+              </TouchableOpacity>
+
               <View style={styles.levelStats}>
                 <View style={styles.levelStat}>
                   <Text style={styles.levelStatLabel}>Referrals</Text>
@@ -192,6 +248,33 @@ export default function ReferralsScreen() {
                   <Text style={styles.levelStatValue}>₹{data.commission.toFixed(2)}</Text>
                 </View>
               </View>
+
+              {isExpanded && data.users.length > 0 && (
+                <View style={styles.usersList}>
+                  <View style={styles.usersListHeader}>
+                    <Text style={styles.usersListTitle}>Team Members</Text>
+                  </View>
+                  {data.users.map((user) => (
+                    <View key={user.id} style={styles.userItem}>
+                      <View style={styles.userAvatar}>
+                        <Text style={styles.userAvatarText}>
+                          {user.full_name.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={styles.userInfo}>
+                        <Text style={styles.userName}>{user.full_name}</Text>
+                        <Text style={styles.userPhone}>{user.phone_number}</Text>
+                        <Text style={styles.userDate}>
+                          Joined: {new Date(user.created_at).toLocaleDateString()}
+                        </Text>
+                      </View>
+                      <View style={styles.userCodeBadge}>
+                        <Text style={styles.userCode}>{user.referral_code}</Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
             </View>
           );
         })}
@@ -394,12 +477,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
+  levelHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  levelHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   levelNumber: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#FFD700',
   },
   levelPercentage: {
+    fontSize: 14,
+    color: '#999',
+  },
+  levelCount: {
     fontSize: 14,
     color: '#999',
   },
@@ -474,5 +571,71 @@ const styles = StyleSheet.create({
   commissionLevel: {
     fontSize: 12,
     color: '#999',
+  },
+  usersList: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#333',
+  },
+  usersListHeader: {
+    marginBottom: 12,
+  },
+  usersListTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FFD700',
+    textTransform: 'uppercase',
+  },
+  userItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 8,
+    marginBottom: 8,
+    gap: 12,
+  },
+  userAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFD700',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  userAvatarText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#1a1a1a',
+  },
+  userInfo: {
+    flex: 1,
+  },
+  userName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
+    marginBottom: 2,
+  },
+  userPhone: {
+    fontSize: 14,
+    color: '#999',
+    marginBottom: 2,
+  },
+  userDate: {
+    fontSize: 12,
+    color: '#666',
+  },
+  userCodeBadge: {
+    backgroundColor: '#333',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  userCode: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFD700',
   },
 });
