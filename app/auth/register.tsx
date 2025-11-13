@@ -8,6 +8,8 @@ export default function Register() {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [aadharNumber, setAadharNumber] = useState('');
+  const [panNumber, setPanNumber] = useState('');
   const [referralCode, setReferralCode] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -29,6 +31,16 @@ export default function Register() {
 
     if (password !== confirmPassword) {
       Alert.alert('Error', 'Passwords do not match');
+      return;
+    }
+
+    if (!aadharNumber || aadharNumber.length !== 12 || !/^\d{12}$/.test(aadharNumber)) {
+      Alert.alert('Error', 'Please enter a valid 12-digit Aadhar number');
+      return;
+    }
+
+    if (!panNumber || !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panNumber)) {
+      Alert.alert('Error', 'Please enter a valid PAN number (Format: ABCDE1234F)');
       return;
     }
 
@@ -79,9 +91,12 @@ export default function Register() {
           id: authData.user.id,
           phone_number: sanitizedPhone,
           full_name: fullName.trim(),
+          aadhar_number: aadharNumber,
+          pan_number: panNumber.toUpperCase(),
           referral_code: generatedCode,
           referred_by: referrerId,
           status: 'active',
+          kyc_verified: false,
         });
 
       if (profileError) {
@@ -168,6 +183,32 @@ export default function Register() {
             onChangeText={setConfirmPassword}
             secureTextEntry
             autoComplete="password-new"
+          />
+        </View>
+
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>Aadhar Number *</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="12-digit Aadhar number"
+            placeholderTextColor="#666"
+            value={aadharNumber}
+            onChangeText={(text) => setAadharNumber(text.replace(/\D/g, '').slice(0, 12))}
+            keyboardType="numeric"
+            maxLength={12}
+          />
+        </View>
+
+        <View style={styles.inputContainer}>
+          <Text style={styles.label}>PAN Number *</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="ABCDE1234F"
+            placeholderTextColor="#666"
+            value={panNumber}
+            onChangeText={(text) => setPanNumber(text.toUpperCase().slice(0, 10))}
+            autoCapitalize="characters"
+            maxLength={10}
           />
         </View>
 

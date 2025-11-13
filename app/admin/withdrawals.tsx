@@ -8,16 +8,19 @@ interface WithdrawalRequest {
   id: string;
   user_id: string;
   amount: number;
-  gold_grams: number;
   status: string;
-  bank_name: string;
-  account_number: string;
-  ifsc_code: string;
-  account_holder_name: string;
-  created_at: string;
-  profile: {
+  payment_method: string;
+  payment_details: {
+    upi_id?: string;
+    account_holder?: string;
+    account_number?: string;
+    ifsc_code?: string;
+    bank_name?: string;
+  };
+  requested_at: string;
+  profiles: {
     full_name: string;
-    phone: string;
+    phone_number: string;
   };
 }
 
@@ -38,16 +41,13 @@ export default function WithdrawalsManagement() {
           id,
           user_id,
           amount,
-          gold_grams,
           status,
-          bank_name,
-          account_number,
-          ifsc_code,
-          account_holder_name,
-          created_at,
-          profile:profiles(full_name, phone)
+          payment_method,
+          payment_details,
+          requested_at,
+          profiles(full_name, phone_number)
         `)
-        .order('created_at', { ascending: false });
+        .order('requested_at', { ascending: false });
 
       if (data) {
         setWithdrawals(data as any);
@@ -59,46 +59,19 @@ export default function WithdrawalsManagement() {
     }
   }
 
-  async function updateWithdrawalStatus(withdrawalId: string, status: 'approved' | 'rejected') {
+  async function updateWithdrawalStatus(withdrawalId: string, newStatus: 'completed' | 'rejected') {
     try {
-      const withdrawal = withdrawals.find((w) => w.id === withdrawalId);
-      if (!withdrawal) return;
-
       const { error: updateError } = await supabase
         .from('withdrawal_requests')
-        .update({ status })
+        .update({
+          status: newStatus,
+          processed_at: new Date().toISOString()
+        })
         .eq('id', withdrawalId);
 
       if (updateError) throw updateError;
 
-      if (status === 'approved') {
-        const { error: transactionError } = await supabase.from('transactions').insert({
-          user_id: withdrawal.user_id,
-          type: 'withdrawal',
-          amount: withdrawal.amount,
-          description: `Withdrawal of ${withdrawal.gold_grams}g gold - ₹${withdrawal.amount}`,
-        });
-
-        if (transactionError) throw transactionError;
-
-        const { data: currentHolding } = await supabase
-          .from('gold_holdings')
-          .select('total_grams')
-          .eq('user_id', withdrawal.user_id)
-          .maybeSingle();
-
-        if (currentHolding) {
-          const newTotal = currentHolding.total_grams - withdrawal.gold_grams;
-          const { error: holdingError } = await supabase
-            .from('gold_holdings')
-            .update({ total_grams: newTotal })
-            .eq('user_id', withdrawal.user_id);
-
-          if (holdingError) throw holdingError;
-        }
-      }
-
-      Alert.alert('Success', `Withdrawal ${status}`);
+      Alert.alert('Success', `Withdrawal ${newStatus}`);
       loadWithdrawals();
     } catch (error) {
       console.error('Error updating withdrawal:', error);
@@ -108,11 +81,12 @@ export default function WithdrawalsManagement() {
 
   function getStatusColor(status: string) {
     switch (status) {
-      case 'approved':
+      case 'completed':
         return '#4CAF50';
       case 'rejected':
         return '#f44336';
       case 'pending':
+      case 'processing':
         return '#FF9800';
       default:
         return '#999';
@@ -121,11 +95,12 @@ export default function WithdrawalsManagement() {
 
   function getStatusIcon(status: string) {
     switch (status) {
-      case 'approved':
+      case 'completed':
         return <Check size={20} color="#4CAF50" />;
       case 'rejected':
         return <X size={20} color="#f44336" />;
       case 'pending':
+      case 'processing':
         return <Clock size={20} color="#FF9800" />;
       default:
         return null;
@@ -137,8 +112,8 @@ export default function WithdrawalsManagement() {
       <View style={styles.withdrawalCard}>
         <View style={styles.cardHeader}>
           <View style={styles.userInfo}>
-            <Text style={styles.userName}>{item.profile?.full_name || 'Unknown User'}</Text>
-            <Text style={styles.phone}>{item.profile?.phone}</Text>
+            <Text style={styles.userName}>{item.profiles?.full_name || 'Unknown User'}</Text>
+            <Text style={styles.phone}>{item.profiles?.phone_number}</Text>
           </View>
           <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '20' }]}>
             {getStatusIcon(item.status)}
@@ -154,28 +129,41 @@ export default function WithdrawalsManagement() {
             <Text style={styles.detailValue}>₹{item.amount.toLocaleString()}</Text>
           </View>
           <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Gold:</Text>
-            <Text style={styles.detailValue}>{item.gold_grams}g</Text>
+            <Text style={styles.detailLabel}>Payment Method:</Text>
+            <Text style={styles.detailValue}>{item.payment_method.toUpperCase()}</Text>
           </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Bank:</Text>
-            <Text style={styles.detailValue}>{item.bank_name}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Account:</Text>
-            <Text style={styles.detailValue}>{item.account_number}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>IFSC:</Text>
-            <Text style={styles.detailValue}>{item.ifsc_code}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Holder:</Text>
-            <Text style={styles.detailValue}>{item.account_holder_name}</Text>
-          </View>
+
+          {item.payment_method === 'upi' && item.payment_details.upi_id && (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>UPI ID:</Text>
+              <Text style={styles.detailValue}>{item.payment_details.upi_id}</Text>
+            </View>
+          )}
+
+          {item.payment_method === 'account' && (
+            <>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Bank:</Text>
+                <Text style={styles.detailValue}>{item.payment_details.bank_name}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Account:</Text>
+                <Text style={styles.detailValue}>{item.payment_details.account_number}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>IFSC:</Text>
+                <Text style={styles.detailValue}>{item.payment_details.ifsc_code}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Holder:</Text>
+                <Text style={styles.detailValue}>{item.payment_details.account_holder}</Text>
+              </View>
+            </>
+          )}
+
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Date:</Text>
-            <Text style={styles.detailValue}>{new Date(item.created_at).toLocaleDateString()}</Text>
+            <Text style={styles.detailValue}>{new Date(item.requested_at).toLocaleDateString()}</Text>
           </View>
         </View>
 
@@ -183,7 +171,7 @@ export default function WithdrawalsManagement() {
           <View style={styles.actions}>
             <TouchableOpacity
               style={[styles.actionBtn, styles.approveBtn]}
-              onPress={() => updateWithdrawalStatus(item.id, 'approved')}
+              onPress={() => updateWithdrawalStatus(item.id, 'completed')}
             >
               <Check size={20} color="#fff" />
               <Text style={styles.actionBtnText}>Approve</Text>

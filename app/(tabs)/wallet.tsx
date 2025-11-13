@@ -28,8 +28,12 @@ export default function Wallet() {
   const [withdrawModalVisible, setWithdrawModalVisible] = useState(false);
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('upi');
+  const [paymentMethod, setPaymentMethod] = useState<'upi' | 'account'>('upi');
   const [upiId, setUpiId] = useState('');
+  const [accountHolder, setAccountHolder] = useState('');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [ifscCode, setIfscCode] = useState('');
+  const [bankName, setBankName] = useState('');
   const [autoWithdraw, setAutoWithdraw] = useState(false);
   const [autoWithdrawThreshold, setAutoWithdrawThreshold] = useState('1000');
 
@@ -103,9 +107,25 @@ export default function Wallet() {
       return;
     }
 
-    if (!upiId.trim()) {
-      Alert.alert('Error', 'Please enter UPI ID');
-      return;
+    let paymentDetails = {};
+
+    if (paymentMethod === 'upi') {
+      if (!upiId.trim()) {
+        Alert.alert('Error', 'Please enter UPI ID');
+        return;
+      }
+      paymentDetails = { upi_id: upiId };
+    } else if (paymentMethod === 'account') {
+      if (!accountHolder.trim() || !accountNumber.trim() || !ifscCode.trim() || !bankName.trim()) {
+        Alert.alert('Error', 'Please fill all bank account details');
+        return;
+      }
+      paymentDetails = {
+        account_holder: accountHolder,
+        account_number: accountNumber,
+        ifsc_code: ifscCode,
+        bank_name: bankName,
+      };
     }
 
     const { error } = await supabase
@@ -114,7 +134,7 @@ export default function Wallet() {
         user_id: user.id,
         amount: amount,
         payment_method: paymentMethod,
-        payment_details: { upi_id: upiId },
+        payment_details: paymentDetails,
         status: 'pending',
       });
 
@@ -128,6 +148,10 @@ export default function Wallet() {
     setWithdrawModalVisible(false);
     setWithdrawAmount('');
     setUpiId('');
+    setAccountHolder('');
+    setAccountNumber('');
+    setIfscCode('');
+    setBankName('');
     loadWalletData();
   };
 
@@ -240,47 +264,121 @@ export default function Wallet() {
         onRequestClose={() => setWithdrawModalVisible(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Withdraw Funds</Text>
+          <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Withdraw Funds</Text>
 
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Amount</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter amount"
-                placeholderTextColor="#666"
-                value={withdrawAmount}
-                onChangeText={setWithdrawAmount}
-                keyboardType="numeric"
-              />
-            </View>
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>Amount</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter amount"
+                  placeholderTextColor="#666"
+                  value={withdrawAmount}
+                  onChangeText={setWithdrawAmount}
+                  keyboardType="numeric"
+                />
+              </View>
 
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>UPI ID</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="yourname@upi"
-                placeholderTextColor="#666"
-                value={upiId}
-                onChangeText={setUpiId}
-              />
-            </View>
+              <View style={styles.inputContainer}>
+                <Text style={styles.label}>Payment Method</Text>
+                <View style={styles.methodSelector}>
+                  <TouchableOpacity
+                    style={[styles.methodButton, paymentMethod === 'upi' && styles.methodButtonActive]}
+                    onPress={() => setPaymentMethod('upi')}
+                  >
+                    <Text style={[styles.methodButtonText, paymentMethod === 'upi' && styles.methodButtonTextActive]}>
+                      UPI
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.methodButton, paymentMethod === 'account' && styles.methodButtonActive]}
+                    onPress={() => setPaymentMethod('account')}
+                  >
+                    <Text style={[styles.methodButtonText, paymentMethod === 'account' && styles.methodButtonTextActive]}>
+                      Bank Account
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
 
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setWithdrawModalVisible(false)}
-              >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.confirmButton]}
-                onPress={handleWithdraw}
-              >
-                <Text style={styles.confirmButtonText}>Withdraw</Text>
-              </TouchableOpacity>
+              {paymentMethod === 'upi' ? (
+                <View style={styles.inputContainer}>
+                  <Text style={styles.label}>UPI ID</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="yourname@upi"
+                    placeholderTextColor="#666"
+                    value={upiId}
+                    onChangeText={setUpiId}
+                  />
+                </View>
+              ) : (
+                <>
+                  <View style={styles.inputContainer}>
+                    <Text style={styles.label}>Account Holder Name</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Enter account holder name"
+                      placeholderTextColor="#666"
+                      value={accountHolder}
+                      onChangeText={setAccountHolder}
+                    />
+                  </View>
+
+                  <View style={styles.inputContainer}>
+                    <Text style={styles.label}>Account Number</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Enter account number"
+                      placeholderTextColor="#666"
+                      value={accountNumber}
+                      onChangeText={setAccountNumber}
+                      keyboardType="numeric"
+                    />
+                  </View>
+
+                  <View style={styles.inputContainer}>
+                    <Text style={styles.label}>IFSC Code</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Enter IFSC code"
+                      placeholderTextColor="#666"
+                      value={ifscCode}
+                      onChangeText={(text) => setIfscCode(text.toUpperCase())}
+                      autoCapitalize="characters"
+                    />
+                  </View>
+
+                  <View style={styles.inputContainer}>
+                    <Text style={styles.label}>Bank Name</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Enter bank name"
+                      placeholderTextColor="#666"
+                      value={bankName}
+                      onChangeText={setBankName}
+                    />
+                  </View>
+                </>
+              )}
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.cancelButton]}
+                  onPress={() => setWithdrawModalVisible(false)}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.confirmButton]}
+                  onPress={handleWithdraw}
+                >
+                  <Text style={styles.confirmButtonText}>Withdraw</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
 
@@ -491,12 +589,45 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 24,
   },
+  modalScrollView: {
+    width: '100%',
+  },
+  modalScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   modalContent: {
     backgroundColor: '#2a2a2a',
     borderRadius: 16,
     padding: 24,
     width: '100%',
     maxWidth: 400,
+  },
+  methodSelector: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  methodButton: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: '#1a1a1a',
+    borderWidth: 2,
+    borderColor: '#333',
+    alignItems: 'center',
+  },
+  methodButtonActive: {
+    backgroundColor: '#FFD700',
+    borderColor: '#FFD700',
+  },
+  methodButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#999',
+  },
+  methodButtonTextActive: {
+    color: '#1a1a1a',
   },
   modalTitle: {
     fontSize: 24,
