@@ -73,22 +73,30 @@ export default function ReferralsScreen() {
       let totalCount = 0;
 
       for (let level = 1; level <= 10; level++) {
-        const { data: referrals } = await supabase
+        const { data: referrals, error: refError } = await supabase
           .from('referral_tree')
           .select('referred_user_id')
           .eq('user_id', profile.id)
           .eq('level', level);
 
+        if (refError) {
+          console.error(`Error fetching referrals for level ${level}:`, refError);
+        }
+
         const count = referrals?.length || 0;
         totalCount += count;
 
-        const { data: commissions } = await supabase
+        const { data: commissions, error: commError } = await supabase
           .from('referral_commissions')
           .select('amount')
           .eq('user_id', profile.id)
           .eq('level', level);
 
-        const levelCommission = commissions?.reduce((sum, c) => sum + c.amount, 0) || 0;
+        if (commError) {
+          console.error(`Error fetching commissions for level ${level}:`, commError);
+        }
+
+        const levelCommission = commissions?.reduce((sum, c) => sum + parseFloat(c.amount.toString()), 0) || 0;
         total += levelCommission;
 
         levelData.push({
@@ -109,7 +117,7 @@ export default function ReferralsScreen() {
   const loadRecentCommissions = async () => {
     if (!profile?.id) return;
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('referral_commissions')
       .select(`
         id,
@@ -122,6 +130,11 @@ export default function ReferralsScreen() {
       .eq('user_id', profile.id)
       .order('created_at', { ascending: false })
       .limit(10);
+
+    if (error) {
+      console.error('Error fetching recent commissions:', error);
+      return;
+    }
 
     if (data) {
       setRecentCommissions(data as any);
@@ -232,8 +245,8 @@ export default function ReferralsScreen() {
           })}
 
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total</Text>
-            <Text style={styles.totalAmount}>₹{totalCommission.toFixed(2)} (20%)</Text>
+            <Text style={styles.totalLabel}>Total Commission</Text>
+            <Text style={styles.totalAmount}>₹{totalCommission.toFixed(2)}</Text>
           </View>
         </View>
 

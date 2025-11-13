@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl } from 'react-native';
-import { Wallet, TrendingUp, Users, IndianRupee } from 'lucide-react-native';
+import { Wallet, TrendingUp, Users, IndianRupee, DollarSign, ArrowDownToLine } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { router } from 'expo-router';
@@ -10,6 +10,8 @@ interface WalletData {
   referral_balance: number;
   total_balance: number;
   gold_balance_mg: number;
+  total_earnings: number;
+  total_withdrawn: number;
 }
 
 interface SubscriptionData {
@@ -34,7 +36,7 @@ interface GoldRate {
 
 export default function HomeScreen() {
   const { profile } = useAuth();
-  const [wallet, setWallet] = useState<WalletData | null>({ saving_balance: 0, referral_balance: 0, total_balance: 0, gold_balance_mg: 0 });
+  const [wallet, setWallet] = useState<WalletData | null>({ saving_balance: 0, referral_balance: 0, total_balance: 0, gold_balance_mg: 0, total_earnings: 0, total_withdrawn: 0 });
   const [subscription, setSubscription] = useState<SubscriptionData | null>(null);
   const [referralStats, setReferralStats] = useState<ReferralStats>({ total_referrals: 0, total_commission: 0 });
   const [goldRate, setGoldRate] = useState<GoldRate | null>(null);
@@ -218,6 +220,42 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
       )}
+
+      <View style={styles.earningsSection}>
+        <Text style={styles.sectionTitle}>My Earnings</Text>
+        <View style={styles.earningsGrid}>
+          <View style={styles.earningBox}>
+            <View style={styles.earningIconContainer}>
+              <DollarSign size={28} color="#10B981" />
+            </View>
+            <Text style={styles.earningLabel}>Total Earnings</Text>
+            <Text style={styles.earningAmount}>₹{(wallet?.total_earnings || 0).toFixed(2)}</Text>
+          </View>
+          <View style={styles.earningBox}>
+            <View style={styles.earningIconContainer}>
+              <TrendingUp size={28} color="#3B82F6" />
+            </View>
+            <Text style={styles.earningLabel}>Available Balance</Text>
+            <Text style={styles.earningAmount}>₹{(wallet?.referral_balance || 0).toFixed(2)}</Text>
+          </View>
+        </View>
+        <View style={styles.earningsGrid}>
+          <View style={styles.earningBox}>
+            <View style={styles.earningIconContainer}>
+              <ArrowDownToLine size={28} color="#F59E0B" />
+            </View>
+            <Text style={styles.earningLabel}>Total Withdrawn</Text>
+            <Text style={styles.earningAmount}>₹{(wallet?.total_withdrawn || 0).toFixed(2)}</Text>
+          </View>
+          <View style={styles.earningBox}>
+            <View style={styles.earningIconContainer}>
+              <Users size={28} color="#8B5CF6" />
+            </View>
+            <Text style={styles.earningLabel}>Referral Income</Text>
+            <Text style={styles.earningAmount}>₹{referralStats.total_commission.toFixed(2)}</Text>
+          </View>
+        </View>
+      </View>
 
       <View style={styles.card}>
         <View style={styles.cardHeader}>
@@ -486,6 +524,51 @@ const styles = StyleSheet.create({
   referralHint: {
     fontSize: 14,
     color: '#999',
+    textAlign: 'center',
+  },
+  earningsSection: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#FFD700',
+    marginBottom: 12,
+  },
+  earningsGrid: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  earningBox: {
+    flex: 1,
+    backgroundColor: '#2a2a2a',
+    borderRadius: 16,
+    padding: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  earningIconContainer: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#1a1a1a',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  earningLabel: {
+    fontSize: 12,
+    color: '#999',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  earningAmount: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
     textAlign: 'center',
   },
 });
