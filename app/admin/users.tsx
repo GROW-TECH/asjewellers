@@ -8,7 +8,8 @@ interface UserProfile {
   id: string;
   full_name: string;
   email: string;
-  phone: string;
+  phone?: string;
+  phone_number?: string;
   is_admin: boolean;
   created_at: string;
 }
@@ -50,8 +51,12 @@ export default function UsersManagement() {
         const usersWithEmails = profiles.map((profile) => {
           const authUser = authUsers?.users.find((u) => u.id === profile.id);
           return {
-            ...profile,
+            id: profile.id,
+            full_name: profile.full_name,
             email: authUser?.email || 'N/A',
+            phone_number: profile.phone_number,
+            is_admin: profile.is_admin,
+            created_at: profile.created_at,
           };
         });
 

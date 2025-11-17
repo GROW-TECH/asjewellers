@@ -13,6 +13,7 @@ type Profile = {
   referral_code?: string;
   referred_by?: string | null;
   status?: string;
+  is_admin?: boolean;
 } | null;
 
 type AuthContextValue = {

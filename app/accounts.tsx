@@ -146,7 +146,7 @@ export default function AccountsScreen() {
                       </>
                     )}
                   </View>
-                  {account.kyc_verified && (
+                  {account.kyc_verified && account.kyc_verified_at && (
                     <Text style={styles.verifiedDate}>
                       {new Date(account.kyc_verified_at).toLocaleDateString('en-IN', {
                         day: '2-digit',
@@ -371,7 +371,7 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   accountColumn: {
-    width: isWeb ? 'calc(33.333% - 12px)' : width > 500 ? 'calc(50% - 12px)' : '100%',
+    width: (isWeb ? '33.333%' : width > 500 ? '50%' : '100%') as any,
     minWidth: 280,
   },
   accountCard: {
