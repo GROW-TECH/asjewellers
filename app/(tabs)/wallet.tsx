@@ -52,6 +52,8 @@ export default function Wallet() {
     if (user && activeAccount) {
       loadWalletData();
       loadEarnings();
+    } else if (user && !activeAccount) {
+      setLoading(false);
     }
   }, [user, activeAccount]);
 
@@ -59,7 +61,7 @@ export default function Wallet() {
     if (!user || !activeAccount) return;
 
     const { data: accountData, error: accountError } = await supabase
-      .from('accounts')
+      .from('investment_accounts')
       .select('wallet_balance')
       .eq('id', activeAccount.id)
       .single();
@@ -311,6 +313,22 @@ export default function Wallet() {
     return (
       <View style={styles.container}>
         <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    );
+  }
+
+  if (!activeAccount) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Wallet</Text>
+        </View>
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyStateTitle}>No Active Account</Text>
+          <Text style={styles.emptyStateText}>
+            Please create an investment account to access your wallet.
+          </Text>
+        </View>
       </View>
     );
   }
@@ -652,6 +670,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
     marginTop: 50,
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  emptyStateTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#FFD700',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  emptyStateText: {
+    fontSize: 16,
+    color: '#999',
+    textAlign: 'center',
+    lineHeight: 24,
   },
   header: {
     flexDirection: 'row',
