@@ -1,8 +1,15 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Alert } from 'react-native';
-import { ArrowDownToLine, Settings, DollarSign, TrendingUp } from 'lucide-react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Modal, Alert, Platform } from 'react-native';
+import { ArrowDownToLine, Settings, DollarSign, TrendingUp, Plus } from 'lucide-react-native';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useAccount } from '@/contexts/AccountContext';
+import Constants from 'expo-constants';
+
+let RazorpayCheckout: any = null;
+if (Platform.OS !== 'web') {
+  RazorpayCheckout = require('react-native-razorpay').default;
+}
 
 interface WalletData {
   balance: number;
@@ -22,11 +29,15 @@ interface Earning {
 
 export default function Wallet() {
   const { user } = useAuth();
+  const { activeAccount } = useAccount();
   const [wallet, setWallet] = useState<WalletData | null>(null);
   const [earnings, setEarnings] = useState<Earning[]>([]);
   const [loading, setLoading] = useState(true);
   const [withdrawModalVisible, setWithdrawModalVisible] = useState(false);
   const [settingsModalVisible, setSettingsModalVisible] = useState(false);
+  const [topUpModalVisible, setTopUpModalVisible] = useState(false);
+  const [topUpAmount, setTopUpAmount] = useState('');
+  const [processingPayment, setProcessingPayment] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'upi' | 'account'>('upi');
   const [upiId, setUpiId] = useState('');
@@ -38,14 +49,25 @@ export default function Wallet() {
   const [autoWithdrawThreshold, setAutoWithdrawThreshold] = useState('1000');
 
   useEffect(() => {
-    if (user) {
+    if (user && activeAccount) {
       loadWalletData();
       loadEarnings();
     }
-  }, [user]);
+  }, [user, activeAccount]);
 
   const loadWalletData = async () => {
-    if (!user) return;
+    if (!user || !activeAccount) return;
+
+    const { data: accountData, error: accountError } = await supabase
+      .from('accounts')
+      .select('wallet_balance')
+      .eq('id', activeAccount.id)
+      .single();
+
+    if (accountError) {
+      console.error('Error loading account wallet:', accountError);
+      return;
+    }
 
     const { data, error } = await supabase
       .from('wallets')
@@ -58,9 +80,9 @@ export default function Wallet() {
       return;
     }
 
-    if (data) {
+    if (data && accountData) {
       setWallet({
-        balance: parseFloat(data.referral_balance || 0),
+        balance: parseFloat(accountData.wallet_balance || 0),
         totalEarnings: parseFloat(data.total_earnings || 0),
         totalWithdrawn: parseFloat(data.total_withdrawn || 0),
         autoWithdrawEnabled: data.auto_withdraw_enabled || false,
@@ -183,6 +205,108 @@ export default function Wallet() {
     loadWalletData();
   };
 
+  const handleTopUp = async () => {
+    if (!user || !activeAccount) return;
+
+    const amount = parseFloat(topUpAmount);
+    if (isNaN(amount) || amount < 1) {
+      Alert.alert('Error', 'Minimum top-up amount is ₹1');
+      return;
+    }
+
+    if (Platform.OS === 'web') {
+      Alert.alert('Not Supported', 'Razorpay payments are not supported on web. Please use the mobile app.');
+      return;
+    }
+
+    setProcessingPayment(true);
+
+    try {
+      const supabaseUrl = Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const { data: session } = await supabase.auth.getSession();
+
+      if (!session?.session?.access_token) {
+        throw new Error('Not authenticated');
+      }
+
+      const response = await fetch(
+        `${supabaseUrl}/functions/v1/create-razorpay-order`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.session.access_token}`,
+          },
+          body: JSON.stringify({
+            amount,
+            accountId: activeAccount.id,
+          }),
+        }
+      );
+
+      const orderData = await response.json();
+
+      if (!response.ok) {
+        throw new Error(orderData.error || 'Failed to create order');
+      }
+
+      const options = {
+        description: 'Wallet Top-up',
+        currency: orderData.currency,
+        key: orderData.keyId,
+        amount: orderData.amount,
+        order_id: orderData.orderId,
+        name: 'AS Jewellers',
+        prefill: {
+          email: user.email,
+        },
+        theme: { color: '#FFD700' },
+      };
+
+      RazorpayCheckout.open(options)
+        .then(async (data: any) => {
+          const verifyResponse = await fetch(
+            `${supabaseUrl}/functions/v1/verify-razorpay-payment`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${session.session.access_token}`,
+              },
+              body: JSON.stringify({
+                razorpay_order_id: data.razorpay_order_id,
+                razorpay_payment_id: data.razorpay_payment_id,
+                razorpay_signature: data.razorpay_signature,
+                accountId: activeAccount.id,
+              }),
+            }
+          );
+
+          const verifyData = await verifyResponse.json();
+
+          if (verifyResponse.ok) {
+            Alert.alert('Success', `₹${verifyData.amount} added to your wallet!`);
+            setTopUpModalVisible(false);
+            setTopUpAmount('');
+            loadWalletData();
+          } else {
+            Alert.alert('Error', verifyData.error || 'Payment verification failed');
+          }
+        })
+        .catch((error: any) => {
+          console.error('Payment error:', error);
+          Alert.alert('Payment Cancelled', error.description || 'Payment was cancelled');
+        })
+        .finally(() => {
+          setProcessingPayment(false);
+        });
+    } catch (error: any) {
+      console.error('Top-up error:', error);
+      Alert.alert('Error', error.message || 'Failed to initiate payment');
+      setProcessingPayment(false);
+    }
+  };
+
   if (loading) {
     return (
       <View style={styles.container}>
@@ -217,13 +341,22 @@ export default function Wallet() {
           </View>
         </View>
 
-        <TouchableOpacity
-          style={styles.withdrawButton}
-          onPress={() => setWithdrawModalVisible(true)}
-        >
-          <ArrowDownToLine size={20} color="#1a1a1a" />
-          <Text style={styles.withdrawButtonText}>Withdraw</Text>
-        </TouchableOpacity>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.topUpButton]}
+            onPress={() => setTopUpModalVisible(true)}
+          >
+            <Plus size={20} color="#1a1a1a" />
+            <Text style={styles.actionButtonText}>Top Up</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.actionButton, styles.withdrawButton]}
+            onPress={() => setWithdrawModalVisible(true)}
+          >
+            <ArrowDownToLine size={20} color="#1a1a1a" />
+            <Text style={styles.actionButtonText}>Withdraw</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {wallet?.autoWithdrawEnabled && (
@@ -436,6 +569,75 @@ export default function Wallet() {
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={topUpModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setTopUpModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Top Up Wallet</Text>
+
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Amount (₹)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter amount"
+                placeholderTextColor="#666"
+                value={topUpAmount}
+                onChangeText={setTopUpAmount}
+                keyboardType="numeric"
+                editable={!processingPayment}
+              />
+              <Text style={styles.helperText}>
+                Minimum amount: ₹1
+              </Text>
+            </View>
+
+            <View style={styles.quickAmounts}>
+              <Text style={styles.label}>Quick Select</Text>
+              <View style={styles.quickAmountsRow}>
+                {['100', '500', '1000', '5000'].map((amt) => (
+                  <TouchableOpacity
+                    key={amt}
+                    style={styles.quickAmountButton}
+                    onPress={() => setTopUpAmount(amt)}
+                    disabled={processingPayment}
+                  >
+                    <Text style={styles.quickAmountText}>₹{amt}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.paymentInfo}>
+              <Text style={styles.paymentInfoText}>Payment powered by Razorpay</Text>
+              <Text style={styles.paymentInfoText}>Secure & encrypted payment</Text>
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.cancelButton]}
+                onPress={() => setTopUpModalVisible(false)}
+                disabled={processingPayment}
+              >
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.confirmButton, processingPayment && styles.disabledButton]}
+                onPress={handleTopUp}
+                disabled={processingPayment}
+              >
+                <Text style={styles.confirmButtonText}>
+                  {processingPayment ? 'Processing...' : 'Pay Now'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -501,8 +703,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#fff',
   },
-  withdrawButton: {
-    backgroundColor: '#FFD700',
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  actionButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -510,10 +716,53 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 8,
   },
-  withdrawButtonText: {
+  topUpButton: {
+    backgroundColor: '#4CAF50',
+  },
+  withdrawButton: {
+    backgroundColor: '#FFD700',
+  },
+  actionButtonText: {
     color: '#1a1a1a',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  quickAmounts: {
+    marginBottom: 24,
+  },
+  quickAmountsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  quickAmountButton: {
+    flex: 1,
+    backgroundColor: '#1a1a1a',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFD700',
+    alignItems: 'center',
+  },
+  quickAmountText: {
+    color: '#FFD700',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  paymentInfo: {
+    backgroundColor: '#1a1a1a',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 24,
+    alignItems: 'center',
+  },
+  paymentInfoText: {
+    color: '#999',
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  disabledButton: {
+    opacity: 0.6,
   },
   autoWithdrawBanner: {
     backgroundColor: '#4CAF50',

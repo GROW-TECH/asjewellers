@@ -20,6 +20,7 @@ export interface InvestmentAccount {
 interface AccountContextType {
   accounts: InvestmentAccount[];
   selectedAccount: InvestmentAccount | null;
+  activeAccount: InvestmentAccount | null;
   setSelectedAccount: (account: InvestmentAccount) => void;
   loadAccounts: () => Promise<void>;
   createAccount: (accountName: string) => Promise<{ success: boolean; error?: string }>;
@@ -148,6 +149,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       value={{
         accounts,
         selectedAccount,
+        activeAccount: selectedAccount,
         setSelectedAccount,
         loadAccounts,
         createAccount,
