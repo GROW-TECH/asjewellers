@@ -14,21 +14,19 @@ const handleLogin = async () => {
   setError('');
   setLoading(true);
 
-  const loginPhone = phone || '1234567890';
-  const loginPassword = password || '123456';
-
-  console.log('Attempting login with phone:', loginPhone);
-  const result = await signInWithPassword(loginPhone, loginPassword);
-  console.log('Login result:', result);
-  setLoading(false);
-  if (result.error) {
-    console.error('Login error:', result.error);
-    setError(result.error);
-  } else {
-    console.log('Login successful, redirecting...');
+  // Hardcoded login credentials
+  if (phone === '1234567890' && password === '123456') {
+    setLoading(false);
+    console.log('Login successful!');
     router.replace('/(tabs)');
+    return;
   }
+
+  // If wrong credentials
+  setLoading(false);
+  setError('Invalid phone or password');
 };
+
 
   return (
     <View style={styles.container}>

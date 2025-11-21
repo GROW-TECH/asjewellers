@@ -1,316 +1,209 @@
-import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
-import { router } from 'expo-router';
+import React, { useState } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
+
+// Make sure you have a supabase client exported from your project, e.g.:
+// export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 import { supabase } from '@/lib/supabase';
 
-export default function Register() {
-  const [fullName, setFullName] = useState('');
+type Props = {
+  onRegistered?: (id: string) => void;
+};
+
+export default function register({ onRegistered }: Props) {
+  const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [aadharNumber, setAadharNumber] = useState('');
-  const [panNumber, setPanNumber] = useState('');
-  const [referralCode, setReferralCode] = useState('');
+  const [referral, setReferral] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const isPhoneValid = (p: string) => /^\d{7,15}$/.test(p);
+  const isPasswordValid = (s: string) => s.length >= 6;
+  const isNameValid = (n: string) => n.trim().length > 1;
+
+  const canSubmit = isPhoneValid(phone) && isPasswordValid(password) && isNameValid(name) && !loading;
+
+  const generateReferralCode = (len = 6) => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let out = '';
+    for (let i = 0; i < len; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
+    return out;
+  };
+
   const handleRegister = async () => {
-    if (!fullName.trim()) {
-      Alert.alert('Error', 'Please enter your full name');
-      return;
-    }
-
-    if (!phone || phone.length < 10) {
-      Alert.alert('Error', 'Please enter a valid phone number');
-      return;
-    }
-
-    if (!password || password.length < 6) {
-      Alert.alert('Error', 'Password must be at least 6 characters');
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      Alert.alert('Error', 'Passwords do not match');
-      return;
-    }
-
-    if (!aadharNumber || aadharNumber.length !== 12 || !/^\d{12}$/.test(aadharNumber)) {
-      Alert.alert('Error', 'Please enter a valid 12-digit Aadhar number');
-      return;
-    }
-
-    if (!panNumber || !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panNumber)) {
-      Alert.alert('Error', 'Please enter a valid PAN number (Format: ABCDE1234F)');
-      return;
-    }
-
+    if (!canSubmit) return;
     setLoading(true);
 
     try {
-      const sanitizedPhone = phone.replace(/\D+/g, '');
-      const email = `${sanitizedPhone}@asjewellers.app`;
+      // Build an email from phone (e.g. 1234567890@asjewellers.app)
+      const sanitizedPhone = phone.trim();
+      const emailFromPhone = `${sanitizedPhone}@asjewellers.app`.toLowerCase();
 
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
+      // 1) Create user in Supabase Auth using email + password.
+      const { data: signData, error: signError } = await supabase.auth.signUp({
+        email: emailFromPhone,
         password,
       });
+      if (signError) throw signError;
 
-      if (authError) {
-        Alert.alert('Error', authError.message);
-        setLoading(false);
-        return;
-      }
+      const user = (signData as any).user ?? (signData as any);
+      // handle older/newer return shapes
+      const userId = user?.id;
+      if (!userId) throw new Error('No user returned from Supabase auth.');
 
-      if (!authData.user) {
-        Alert.alert('Error', 'User creation failed');
-        setLoading(false);
-        return;
-      }
-
-      let referrerId = null;
-      if (referralCode?.trim()) {
-        const { data: referrer } = await supabase
-          .from('profiles')
+      // 2) Resolve referral (if provided)
+      let referredBy: string | null = null;
+      if (referral.trim()) {
+        const { data: refRow, error: refError } = await supabase
+          .from('user_profile')
           .select('id')
-          .eq('referral_code', referralCode.trim().toUpperCase())
+          .eq('referral_code', referral.trim())
+          .limit(1)
           .maybeSingle();
 
-        if (!referrer) {
-          Alert.alert('Error', 'Invalid referral code');
-          setLoading(false);
-          return;
-        }
-        referrerId = referrer.id;
+        if (refError) console.warn('referral lookup error', refError);
+        else if (refRow && (refRow as any).id) referredBy = (refRow as any).id;
       }
 
-      const generatedCode = 'REF' + Math.floor(100000 + Math.random() * 900000);
-
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: authData.user.id,
-          phone_number: sanitizedPhone,
-          full_name: fullName.trim(),
-          aadhar_number: aadharNumber,
-          pan_number: panNumber.toUpperCase(),
-          referral_code: generatedCode,
-          referred_by: referrerId,
-          status: 'active',
-          kyc_verified: false,
-        });
-
-      if (profileError) {
-        Alert.alert('Error', profileError.message);
-        setLoading(false);
-        return;
+      // 3) Generate unique referral code for new user
+      let myReferral = generateReferralCode(7);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { data: exists } = await supabase.from('user_profile').select('id').eq('referral_code', myReferral).limit(1);
+        if (!exists || (exists as any).length === 0) break;
+        myReferral = generateReferralCode(7);
       }
 
-      const { error: walletError } = await supabase
-        .from('wallets')
-        .insert({
-          user_id: authData.user.id,
-          saving_balance: 0,
-          referral_balance: 0,
-          total_balance: 0,
-        });
+      // 4) Insert into user_profile with id = auth user id
+      const profilePayload = {
+        id: userId,
+        email: emailFromPhone,
+        full_name: name.trim(),
+        phone: sanitizedPhone,
+        phone_verified: false,
+        referral_code: myReferral,
+        referred_by: referredBy,
+        metadata: {},
+      };
 
-      if (walletError) {
-        console.error('Wallet creation error:', walletError);
-      }
+      const { error: insertError } = await supabase.from('user_profile').insert(profilePayload);
+      if (insertError) throw insertError;
 
-      Alert.alert('Success', 'Account created successfully!', [
-        { text: 'OK', onPress: () => router.replace('/auth/login') },
-      ]);
-    } catch (error: any) {
-      console.error('Registration error:', error);
-      Alert.alert('Error', error.message || 'Unable to register.');
-    } finally {
       setLoading(false);
+      Alert.alert('Success', 'Registered — check email/phone for verification if required.');
+      if (onRegistered) onRegistered(userId);
+    } catch (err: any) {
+      setLoading(false);
+      console.error(err);
+      Alert.alert('Registration error', err.message || JSON.stringify(err));
     }
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>Create Account</Text>
-        <Text style={styles.subtitle}>Join A S JEWELLERS today</Text>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={styles.container}
+    >
+      <Text style={styles.title}>Create account</Text>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Full Name *</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter your full name"
-            placeholderTextColor="#666"
-            value={fullName}
-            onChangeText={setFullName}
-            autoComplete="name"
-          />
-        </View>
+      <TextInput
+        placeholder="Full name"
+        value={name}
+        onChangeText={setName}
+        autoCapitalize="words"
+        returnKeyType="next"
+        style={styles.input}
+      />
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Phone Number *</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="1234567890"
-            placeholderTextColor="#666"
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
-            autoComplete="tel"
-          />
-        </View>
+      <TextInput
+        placeholder="Phone number"
+        value={phone}
+        onChangeText={(t) => setPhone(t.replace(/[^0-9]/g, ''))}
+        keyboardType="phone-pad"
+        returnKeyType="next"
+        style={styles.input}
+        maxLength={15}
+      />
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Password *</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Minimum 6 characters"
-            placeholderTextColor="#666"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            autoComplete="password-new"
-          />
-        </View>
+      <TextInput
+        placeholder="Password (min 6 chars)"
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+        returnKeyType="done"
+        style={styles.input}
+      />
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Confirm Password *</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Re-enter your password"
-            placeholderTextColor="#666"
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-            secureTextEntry
-            autoComplete="password-new"
-          />
-        </View>
+      <TextInput
+        placeholder="Referral code (optional)"
+        value={referral}
+        onChangeText={setReferral}
+        autoCapitalize="characters"
+        returnKeyType="done"
+        style={styles.input}
+      />
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Aadhar Number *</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="12-digit Aadhar number"
-            placeholderTextColor="#666"
-            value={aadharNumber}
-            onChangeText={(text) => setAadharNumber(text.replace(/\D/g, '').slice(0, 12))}
-            keyboardType="numeric"
-            maxLength={12}
-          />
-        </View>
+      <TouchableOpacity
+        style={[styles.button, !canSubmit && styles.buttonDisabled]}
+        onPress={handleRegister}
+        activeOpacity={0.8}
+        disabled={!canSubmit}
+      >
+        <Text style={styles.buttonText}>{loading ? 'Registering...' : 'Register'}</Text>
+      </TouchableOpacity>
 
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>PAN Number *</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="ABCDE1234F"
-            placeholderTextColor="#666"
-            value={panNumber}
-            onChangeText={(text) => setPanNumber(text.toUpperCase().slice(0, 10))}
-            autoCapitalize="characters"
-            maxLength={10}
-          />
-        </View>
-
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Referral Code (Optional)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter referral code"
-            placeholderTextColor="#666"
-            value={referralCode}
-            onChangeText={(text) => setReferralCode(text.toUpperCase())}
-            autoCapitalize="characters"
-          />
-        </View>
-
-        <TouchableOpacity
-          style={[styles.button, loading && styles.buttonDisabled]}
-          onPress={handleRegister}
-          disabled={loading}
-        >
-          <Text style={styles.buttonText}>
-            {loading ? 'Creating Account...' : 'Register'}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.loginLink}
-          onPress={() => router.back()}
-        >
-          <Text style={styles.loginText}>
-            Already have an account? <Text style={styles.loginTextBold}>Sign In</Text>
-          </Text>
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+      <Text style={styles.hint}>Phone must be numbers only. Password min 6 chars.</Text>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
-  },
-  content: {
-    padding: 24,
-    paddingTop: 60,
+    padding: 20,
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
   },
   title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#FFD700',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#999',
-    marginBottom: 32,
-  },
-  inputContainer: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
+    fontSize: 24,
     fontWeight: '600',
-    color: '#fff',
-    marginBottom: 8,
+    marginBottom: 24,
+    textAlign: 'center',
   },
   input: {
-    backgroundColor: '#2a2a2a',
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    color: '#fff',
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: '#ddd',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 12,
+    fontSize: 16,
   },
   button: {
-    backgroundColor: '#FFD700',
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: '#2563EB',
+    paddingVertical: 14,
+    borderRadius: 8,
     alignItems: 'center',
-    marginTop: 24,
+    marginTop: 6,
   },
   buttonDisabled: {
-    opacity: 0.6,
+    backgroundColor: '#9CA3AF',
   },
   buttonText: {
-    color: '#1a1a1a',
+    color: '#fff',
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
-  loginLink: {
-    marginTop: 24,
-    alignItems: 'center',
-    marginBottom: 40,
-  },
-  loginText: {
-    color: '#999',
-    fontSize: 14,
-  },
-  loginTextBold: {
-    color: '#FFD700',
-    fontWeight: 'bold',
+  hint: {
+    marginTop: 12,
+    textAlign: 'center',
+    color: '#6B7280',
   },
 });

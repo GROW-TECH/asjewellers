@@ -22,6 +22,7 @@ export default function TabLayout() {
           tabBarIcon: ({ size, color }) => <Home size={size} color={color} />,
         }}
       />
+
       <Tabs.Screen
         name="wallet"
         options={{
@@ -29,6 +30,7 @@ export default function TabLayout() {
           tabBarIcon: ({ size, color }) => <Wallet size={size} color={color} />,
         }}
       />
+
       <Tabs.Screen
         name="plans"
         options={{
@@ -36,6 +38,7 @@ export default function TabLayout() {
           tabBarIcon: ({ size, color }) => <TrendingUp size={size} color={color} />,
         }}
       />
+
       <Tabs.Screen
         name="transactions"
         options={{
@@ -43,6 +46,7 @@ export default function TabLayout() {
           tabBarIcon: ({ size, color }) => <Receipt size={size} color={color} />,
         }}
       />
+
       <Tabs.Screen
         name="referrals"
         options={{
@@ -50,6 +54,7 @@ export default function TabLayout() {
           tabBarIcon: ({ size, color }) => <Users size={size} color={color} />,
         }}
       />
+
       <Tabs.Screen
         name="profile"
         options={{

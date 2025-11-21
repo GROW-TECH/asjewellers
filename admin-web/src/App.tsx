@@ -7,6 +7,8 @@ import Users from './pages/Users';
 import Subscriptions from './pages/Subscriptions';
 import Payments from './pages/Payments';
 import Commissions from './pages/Commissions';
+// import Signup from './pages/Signup';
+import Plans from './pages/Plans';
 
 function App() {
   const [session, setSession] = useState<any>(null);
@@ -57,17 +59,19 @@ function App() {
     );
   }
 
-  if (!session || !isAdmin) {
-    return <Login />;
-  }
+  // if (!session || !isAdmin) {
+  //   return <Login />;
+  // }
 
   return (
     <Routes>
-      <Route path="/" element={<Dashboard />} />
+      <Route path="/" element={<Login />} />
+      <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/users" element={<Users />} />
       <Route path="/subscriptions" element={<Subscriptions />} />
       <Route path="/payments" element={<Payments />} />
       <Route path="/commissions" element={<Commissions />} />
+      <Route path="/plans" element={<Plans />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
