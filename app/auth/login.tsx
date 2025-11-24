@@ -1,32 +1,52 @@
-import { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
-import { router } from 'expo-router';
-import { useAuth } from '@/contexts/AuthContext';
+import { useEffect, useState } from "react";
+import { View, Text, TextInput, TouchableOpacity, StyleSheet } from "react-native";
+import { router } from "expo-router";
+import { supabase } from "@/lib/supabase"; // Adjust path if needed
 
 export default function Login() {
-  const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const { signInWithPassword } = useAuth();
+  const [error, setError] = useState("");
 
-const handleLogin = async () => {
-  setError('');
-  setLoading(true);
+  const handleLogin = async () => {
+    setError("");
+    setLoading(true);
 
-  // Hardcoded login credentials
-  if (phone === '1234567890' && password === '123456') {
-    setLoading(false);
-    console.log('Login successful!');
-    router.replace('/(tabs)');
-    return;
-  }
+    try {
+      const phoneNumber = phone.trim().replace(/\D/g, "");
+      if (!phoneNumber) throw new Error("Enter phone number");
+      if (!password) throw new Error("Enter password");
 
-  // If wrong credentials
-  setLoading(false);
-  setError('Invalid phone or password');
-};
+      // Construct email using phone number for Supabase auth
+      const emailFromPhone = `${phoneNumber}@asjewellers.app`;
 
+      // Supabase login
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: emailFromPhone,
+        password,
+      });
+
+      if (signInError) throw signInError;
+
+      // Check user session
+      if (!data?.session?.user) {
+        if (data?.user) {
+          setLoading(false);
+          setError("Please confirm the account (check email) before signing in.");
+          return;
+        }
+        throw new Error("Login failed");
+      }
+
+      // Success: Redirect to main app tabs
+      router.replace("/(tabs)");
+    } catch (e: any) {
+      setError(e?.message ?? "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <View style={styles.container}>
@@ -37,7 +57,7 @@ const handleLogin = async () => {
         <View style={styles.debugContainer}>
           <Text style={styles.debugText}>Phone: {phone}</Text>
           <Text style={styles.debugText}>Password: {password.length} chars</Text>
-          <Text style={styles.debugText}>Loading: {loading ? 'Yes' : 'No'}</Text>
+          <Text style={styles.debugText}>Loading: {loading ? "Yes" : "No"}</Text>
           {error ? <Text style={styles.debugText}>Error: {error}</Text> : null}
         </View>
 
@@ -78,15 +98,10 @@ const handleLogin = async () => {
           onPress={handleLogin}
           disabled={loading}
         >
-          <Text style={styles.buttonText}>
-            {loading ? 'Signing In...' : 'Sign In'}
-          </Text>
+          <Text style={styles.buttonText}>{loading ? "Signing In..." : "Sign In"}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.registerLink}
-          onPress={() => router.push('/auth/register')}
-        >
+        <TouchableOpacity style={styles.registerLink} onPress={() => router.push("/auth/register")}>
           <Text style={styles.registerText}>
             Don't have an account? <Text style={styles.registerTextBold}>Register</Text>
           </Text>
@@ -99,45 +114,45 @@ const handleLogin = async () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a1a',
+    backgroundColor: "#1a1a1a",
   },
   content: {
     flex: 1,
     padding: 24,
-    justifyContent: 'center',
+    justifyContent: "center",
   },
   title: {
     fontSize: 32,
-    fontWeight: 'bold',
-    color: '#FFD700',
+    fontWeight: "bold",
+    color: "#FFD700",
     marginBottom: 8,
-    textAlign: 'center',
+    textAlign: "center",
   },
   subtitle: {
     fontSize: 16,
-    color: '#999',
+    color: "#999",
     marginBottom: 48,
-    textAlign: 'center',
+    textAlign: "center",
   },
   errorContainer: {
-    backgroundColor: '#ff4444',
+    backgroundColor: "#ff4444",
     borderRadius: 8,
     padding: 12,
     marginBottom: 24,
   },
   errorText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 14,
-    textAlign: 'center',
+    textAlign: "center",
   },
   debugContainer: {
-    backgroundColor: '#333',
+    backgroundColor: "#333",
     padding: 12,
     marginBottom: 24,
     borderRadius: 8,
   },
   debugText: {
-    color: '#FFD700',
+    color: "#FFD700",
     fontSize: 12,
     marginBottom: 4,
   },
@@ -146,43 +161,43 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#fff',
+    fontWeight: "600",
+    color: "#fff",
     marginBottom: 8,
   },
   input: {
-    backgroundColor: '#2a2a2a',
+    backgroundColor: "#2a2a2a",
     borderRadius: 12,
     padding: 16,
     fontSize: 16,
-    color: '#fff',
+    color: "#fff",
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: "#333",
   },
   button: {
-    backgroundColor: '#FFD700',
+    backgroundColor: "#FFD700",
     borderRadius: 12,
     padding: 16,
-    alignItems: 'center',
+    alignItems: "center",
   },
   buttonDisabled: {
     opacity: 0.6,
   },
   buttonText: {
-    color: '#1a1a1a',
+    color: "#1a1a1a",
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: "bold",
   },
   registerLink: {
     marginTop: 24,
-    alignItems: 'center',
+    alignItems: "center",
   },
   registerText: {
-    color: '#999',
+    color: "#999",
     fontSize: 14,
   },
   registerTextBold: {
-    color: '#FFD700',
-    fontWeight: 'bold',
+    color: "#FFD700",
+    fontWeight: "bold",
   },
 });

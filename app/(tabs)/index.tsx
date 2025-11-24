@@ -70,6 +70,7 @@ const DUMMY_ACCOUNTS = [
 ];
 
 export default function HomeScreen() {
+  
   const { profile } = useAuth();
   const [wallet, setWallet] = useState<WalletData | null>({ saving_balance: 0, referral_balance: 0, total_balance: 0, gold_balance_mg: 0, total_earnings: 0, total_withdrawn: 0 });
   const [subscription, setSubscription] = useState<SubscriptionData | null>(null);

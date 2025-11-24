@@ -16,6 +16,10 @@
       "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
+        "extra": {
+      "SERVER_URL": "https://localhost:3000"
+    },
+
     "plugins": [
       "expo-router",
       "expo-font",
