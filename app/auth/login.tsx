@@ -9,6 +9,14 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+useEffect(() => {
+  (async () => {
+    const { data } = await supabase.auth.getSession();
+    console.log("Session check:", data);
+  })();
+}, []);
+
+  
   const handleLogin = async () => {
     setError("");
     setLoading(true);

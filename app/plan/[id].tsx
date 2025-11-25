@@ -11,7 +11,7 @@ import {
   SafeAreaView,
   Platform,
 } from 'react-native';
-import { TrendingUp, Calendar, DollarSign, Gift, ArrowLeft, Star, Shield, Clock, User, Server, HelpCircle } from 'lucide-react-native';
+import { TrendingUp, Calendar, DollarSign, Gift, ArrowLeft, Star, Shield, Clock, User, Server, HelpCircle, Database } from 'lucide-react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import Constants from 'expo-constants';
 import { supabase } from '@/lib/supabase';
@@ -30,7 +30,7 @@ interface Plan {
 }
 
 // Use port 3001 to avoid conflicts
-const SERVER_URL = (Constants.expoConfig?.extra as any)?.SERVER_URL || 'http://localhost:3001';
+const SERVER_URL = "http://localhost:3001";
 
 // Simple Razorpay loader for web
 const loadRazorpayScript = (): Promise<boolean> => {
@@ -60,88 +60,6 @@ const loadRazorpayScript = (): Promise<boolean> => {
     };
 
     document.head.appendChild(script);
-  });
-};
-
-// Direct payment function
-const openRazorpayDirectly = async (
-  order_id: string,
-  amount: number,
-  currency: string,
-  key_id: string,
-  userData: any,
-  planName: string,
-  verifyUrl: string,
-  subscriptionId: number
-): Promise<any> => {
-  if (Platform.OS !== 'web') {
-    return { success: false, message: 'Native payment not implemented' };
-  }
-
-  const scriptLoaded = await loadRazorpayScript();
-  if (!scriptLoaded) {
-    return { success: false, message: 'Failed to load payment gateway' };
-  }
-
-  if (!(window as any).Razorpay) {
-    return { success: false, message: 'Payment gateway not available' };
-  }
-
-  return new Promise((resolve) => {
-    try {
-      const options = {
-        key: key_id,
-        amount: amount.toString(),
-        currency: currency,
-        name: 'AS Jewellers',
-        description: planName,
-        order_id: order_id,
-        prefill: {
-          name: userData?.name || 'Customer',
-          email: userData?.email || 'customer@example.com',
-          contact: userData?.phone || '9999999999',
-        },
-        theme: {
-          color: '#F6C24A'
-        },
-        handler: async (response: any) => {
-          console.log('Payment successful:', response);
-          try {
-            const verifyResponse = await fetch(verifyUrl, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_order_id: response.razorpay_order_id,
-                razorpay_signature: response.razorpay_signature,
-                subscription_id: subscriptionId,
-              }),
-            });
-            const result = await verifyResponse.json();
-            resolve(result);
-          } catch (error) {
-            console.error('Verification error:', error);
-            resolve({ success: false, message: 'Payment verification failed' });
-          }
-        },
-        modal: {
-          ondismiss: () => {
-            console.log('Payment modal closed');
-            resolve({ success: false, message: 'Payment cancelled' });
-          },
-        },
-      };
-
-      console.log('Opening Razorpay with options:', options);
-      const razorpay = new (window as any).Razorpay(options);
-      razorpay.open();
-
-    } catch (error: any) {
-      console.error('Razorpay error:', error);
-      resolve({ success: false, message: error.message || 'Payment failed' });
-    }
   });
 };
 
@@ -221,7 +139,6 @@ export default function PlanDetailsPage() {
         setServerStatus('❌ Connection Failed');
       }
       
-      // Show detailed error in console for debugging
       console.log('Connection error details:', {
         url: `${SERVER_URL}/health`,
         error: error.message,
@@ -238,7 +155,6 @@ export default function PlanDetailsPage() {
         { 
           text: 'Copy Commands', 
           onPress: () => {
-            // Copy to clipboard (web only)
             if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
               navigator.clipboard.writeText('cd server && node index.js');
               Alert.alert('Copied!', 'Commands copied to clipboard');
@@ -256,13 +172,11 @@ export default function PlanDetailsPage() {
     try {
       Alert.alert('Network Test', 'Testing basic connectivity...');
       
-      // Test if we can reach external sites
       const externalTest = await fetch('https://jsonplaceholder.typicode.com/posts/1');
       if (externalTest.ok) {
         console.log('✅ External connectivity: OK');
       }
       
-      // Test local server with different methods
       const methods = ['GET', 'POST'];
       for (const method of methods) {
         try {
@@ -275,12 +189,33 @@ export default function PlanDetailsPage() {
       
       Alert.alert(
         'Network Test Complete', 
-        'Check browser console for detailed results.\n\nIf all requests fail, there might be a firewall or network issue.'
+        'Check browser console for detailed results.'
       );
       
     } catch (error) {
       console.error('Network test failed:', error);
       Alert.alert('Network Error', 'Cannot reach external websites. Check your internet connection.');
+    }
+  };
+
+  // Test database connection
+  const testDatabaseConnection = async () => {
+    try {
+      console.log('🧪 Testing database connection...');
+      
+      // Test subscription table access
+      const { data: testData, error: testError } = await supabase
+        .from('user_subscriptions')
+        .select('count')
+        .limit(1);
+      
+      console.log('📊 Subscription table check:', { testData, testError });
+
+      Alert.alert('Database Test', `Connection ${testError ? 'failed' : 'successful'}. Check console for details.`);
+
+    } catch (error) {
+      console.error('❌ Database test failed:', error);
+      Alert.alert('Database Error', 'Connection test failed. Check console.');
     }
   };
 
@@ -343,7 +278,6 @@ export default function PlanDetailsPage() {
       return;
     }
 
-    // Check if user is logged in
     if (!userSession) {
       Alert.alert(
         'Login Required',
@@ -356,13 +290,11 @@ export default function PlanDetailsPage() {
       return;
     }
 
-    // Check if Razorpay is ready
     if (Platform.OS === 'web' && !razorpayReady) {
       Alert.alert('Error', 'Payment gateway is not ready. Please try again.');
       return;
     }
 
-    // Check if server is running
     if (!serverStatus.includes('✅')) {
       Alert.alert(
         'Server Not Ready', 
@@ -379,13 +311,15 @@ export default function PlanDetailsPage() {
     let subscriptionId: number | null = null;
 
     try {
-      console.log('Starting subscription process...');
+      console.log('🚀 Starting subscription process...');
+      console.log('👤 User ID:', userSession.user.id);
 
-      // 1) Create subscription
+      // 1) Create subscription directly (no foreign key constraints now)
       const startDate = new Date();
       const endDate = new Date();
       endDate.setMonth(endDate.getMonth() + plan.total_months);
 
+      console.log('📝 Creating subscription record...');
       const { data: subData, error: subError } = await supabase
         .from('user_subscriptions')
         .insert({
@@ -402,18 +336,17 @@ export default function PlanDetailsPage() {
         .single();
 
       if (subError) {
-        console.error('Subscription error:', subError);
-        Alert.alert('Error', 'Failed to create subscription. Please try again.');
+        console.error('❌ Subscription error:', subError);
+        Alert.alert('Error', `Failed to create subscription: ${subError.message}`);
         return;
       }
 
       subscriptionId = (subData as any).id;
-      subscriptionIdRef.current = subscriptionId;
-      console.log('Subscription created:', subscriptionId);
+      console.log('✅ Subscription created successfully:', subscriptionId);
 
       // 2) Create Razorpay order
       const amountInPaise = Math.round(plan.monthly_due * 100);
-      console.log('Creating order for amount:', amountInPaise);
+      console.log('💰 Creating order for amount:', amountInPaise);
 
       const createResp = await fetch(`${SERVER_URL}/create-razorpay-order`, {
         method: 'POST',
@@ -428,7 +361,7 @@ export default function PlanDetailsPage() {
 
       if (!createResp.ok) {
         const errorText = await createResp.text();
-        console.error('Order creation failed:', createResp.status, errorText);
+        console.error('❌ Order creation failed:', createResp.status, errorText);
         
         let errorMessage = `Order creation failed: ${createResp.status}`;
         try {
@@ -442,7 +375,7 @@ export default function PlanDetailsPage() {
       }
 
       const orderData = await createResp.json();
-      console.log('Order response:', orderData);
+      console.log('✅ Order response:', orderData);
 
       const { order_id, amount, currency, key_id } = orderData;
 
@@ -459,32 +392,93 @@ export default function PlanDetailsPage() {
         phone: userSession.user.user_metadata?.phone || '9999999999'
       };
 
-      console.log('Opening payment gateway...');
+      console.log('🎯 Opening payment gateway...');
 
-      // 4) Open Razorpay directly
-      const paymentResult = await openRazorpayDirectly(
-        order_id,
-        Number(amount),
-        currency || 'INR',
-        key_id,
-        userData,
-        plan.scheme_name,
-        `${SERVER_URL}/verify-payment`,
-        subscriptionId
-      );
+      // 4) Open Razorpay
+      const paymentResult = await new Promise((resolve) => {
+        try {
+          const options = {
+            key: key_id,
+            amount: amount.toString(),
+            currency: currency,
+            order_id: order_id,
+            name: 'AS Jewellers',
+            description: plan.scheme_name,
+            prefill: {
+              name: userData.name,
+              email: userData.email,
+              contact: userData.phone,
+            },
+            theme: {
+              color: '#F6C24A'
+            },
+            handler: async (response: any) => {
+              console.log('✅ Payment successful:', response);
+              try {
+                // Verify payment with server
+                const verifyResponse = await fetch(`${SERVER_URL}/verify-payment`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    razorpay_payment_id: response.razorpay_payment_id,
+                    razorpay_order_id: response.razorpay_order_id,
+                    razorpay_signature: response.razorpay_signature,
+                    subscription_id: subscriptionId,
+                  }),
+                });
+                const result = await verifyResponse.json();
+                
+                if (result.success) {
+                  // Update subscription status on successful payment
+                  try {
+                    const { error: updateError } = await supabase
+                      .from('user_subscriptions')
+                      .update({ 
+                        status: 'active', 
+                        total_paid: plan.monthly_due 
+                      })
+                      .eq('id', subscriptionId);
+                      
+                    if (updateError) {
+                      console.error('❌ Failed to activate subscription:', updateError);
+                    }
+                  } catch (updateError) {
+                    console.error('❌ Error updating subscription:', updateError);
+                  }
+                  
+                  resolve({ success: true, message: 'Subscription activated successfully!' });
+                } else {
+                  resolve({ success: false, message: 'Payment verification failed' });
+                }
+              } catch (error) {
+                console.error('❌ Verification error:', error);
+                resolve({ success: false, message: 'Payment verification failed' });
+              }
+            },
+            modal: {
+              ondismiss: () => {
+                console.log('❌ Payment modal closed');
+                resolve({ success: false, message: 'Payment cancelled' });
+              },
+            },
+          };
 
-      console.log('Payment result:', paymentResult);
+          console.log('🔓 Opening Razorpay with options:', options);
+          const razorpay = new (window as any).Razorpay(options);
+          razorpay.open();
 
-      // 5) Handle result
+        } catch (error: any) {
+          console.error('❌ Razorpay error:', error);
+          resolve({ success: false, message: error.message || 'Payment failed' });
+        }
+      });
+
+      console.log('📊 Payment result:', paymentResult);
+
+      // 5) Handle final result
       if (paymentResult.success) {
-        await supabase
-          .from('user_subscriptions')
-          .update({ 
-            status: 'active', 
-            total_paid: plan.monthly_due 
-          })
-          .eq('id', subscriptionId);
-
         Alert.alert(
           'Success! 🎉',
           'Your subscription has been activated successfully!',
@@ -504,21 +498,21 @@ export default function PlanDetailsPage() {
       }
 
     } catch (err: any) {
-      console.error('Subscription error:', err);
-      
+      console.error('❌ Subscription error:', err);
+      Alert.alert('Payment Failed', err.message || 'Something went wrong. Please try again.');
+
       // Cleanup on failure
       if (subscriptionId) {
-        await supabase
-          .from('user_subscriptions')
-          .update({ status: 'failed' })
-          .eq('id', subscriptionId)
-          .catch(console.error);
+        try {
+          await supabase
+            .from('user_subscriptions')
+            .update({ status: 'failed' })
+            .eq('id', subscriptionId);
+        } catch (cleanupError) {
+          console.error('❌ Cleanup error:', cleanupError);
+        }
       }
 
-      Alert.alert(
-        'Payment Failed',
-        err.message || 'Something went wrong. Please try again.'
-      );
     } finally {
       setActionLoading(false);
     }
@@ -531,7 +525,7 @@ export default function PlanDetailsPage() {
     try {
       await loadRazorpayScript();
       
-      console.log('Creating test order...');
+      console.log('🧪 Creating test order...');
       
       const createResp = await fetch(`${SERVER_URL}/create-razorpay-order`, {
         method: 'POST',
@@ -539,29 +533,20 @@ export default function PlanDetailsPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ 
-          amount_in_paise: 10000, // 100 INR
+          amount_in_paise: 10000,
           receipt_id: `test_${Date.now()}`
         }),
       });
 
       if (!createResp.ok) {
         const errorText = await createResp.text();
-        console.error('Test order creation failed:', createResp.status, errorText);
-        
-        let errorMessage = `Cannot create test order: ${createResp.status}`;
-        try {
-          const errorData = JSON.parse(errorText);
-          errorMessage = errorData.error || errorData.details || errorMessage;
-        } catch (e) {
-          // Not JSON, use text as is
-        }
-        
-        Alert.alert('Server Error', errorMessage);
+        console.error('❌ Test order creation failed:', createResp.status, errorText);
+        Alert.alert('Server Error', `Cannot create test order: ${createResp.status}`);
         return;
       }
 
       const orderData = await createResp.json();
-      console.log('Test order response:', orderData);
+      console.log('✅ Test order response:', orderData);
 
       const { order_id, amount, currency, key_id } = orderData;
 
@@ -579,7 +564,7 @@ export default function PlanDetailsPage() {
         description: 'Test Payment',
         handler: function(response: any) {
           alert('✅ Payment successful!\nPayment ID: ' + response.razorpay_payment_id);
-          console.log('Test payment success:', response);
+          console.log('✅ Test payment success:', response);
         },
         prefill: {
           name: 'Test User',
@@ -591,22 +576,19 @@ export default function PlanDetailsPage() {
         },
         modal: {
           ondismiss: function() {
-            console.log('Test payment cancelled');
+            console.log('❌ Test payment cancelled');
             alert('Payment cancelled');
           }
         }
       };
 
-      console.log('Opening test payment with order:', order_id);
+      console.log('🔓 Opening test payment with order:', order_id);
       const razorpay = new (window as any).Razorpay(options);
       razorpay.open();
       
     } catch (error: any) {
-      console.error('Test payment failed:', error);
-      Alert.alert(
-        'Payment Failed', 
-        error.message || 'Could not open payment gateway. Check server connection.'
-      );
+      console.error('❌ Test payment failed:', error);
+      Alert.alert('Payment Failed', error.message || 'Could not open payment gateway.');
     }
   };
 
@@ -690,6 +672,14 @@ export default function PlanDetailsPage() {
               onPress={testNetworkConnectivity}
             >
               <Text style={styles.debugButtonText}>Test Network</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.debugButton, styles.databaseButton]}
+              onPress={testDatabaseConnection}
+            >
+              <Database size={14} color="#fff" />
+              <Text style={styles.debugButtonText}>Test Database</Text>
             </TouchableOpacity>
           </View>
           
@@ -898,8 +888,11 @@ const styles = StyleSheet.create({
   networkButton: {
     backgroundColor: '#9C27B0',
   },
+  databaseButton: {
+    backgroundColor: '#607D8B',
+  },
   helpButton: {
-    backgroundColor: '#FF9800',
+    backgroundColor: '#FF5722',
     marginTop: 8,
   },
   debugButtonText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },

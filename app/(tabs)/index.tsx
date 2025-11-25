@@ -80,6 +80,13 @@ export default function HomeScreen() {
   const [accountModalVisible, setAccountModalVisible] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState(DUMMY_ACCOUNTS[0]);
 
+  // useEffect(() => {
+  //   (async () => {
+  //     const { data } = await supabase.auth.getSession();
+  //     console.log("Session check:", data);
+  //   })();
+  // }, []);
+  
   useEffect(() => {
     if (profile) {
       loadData();
