@@ -1,539 +1,332 @@
-// server/index.js
-import dotenv from 'dotenv';
-dotenv.config();
-
+// server/index.js (ES module)
 import express from 'express';
-import bodyParser from 'body-parser';
 import cors from 'cors';
+import bodyParser from 'body-parser';
+import dotenv from 'dotenv';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js'; // Import Supabase client
+
+dotenv.config();
 
 const app = express();
+const PORT = process.env.PORT || 3001;
 
-// Simple CORS configuration - avoid complex origin checking that causes issues
-app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'https://localhost:3000',
-    'https://localhost:3001',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-    'http://localhost:8081',
-    'exp://localhost:8081'
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With']
-}));
-
-app.use(bodyParser.json({ limit: '10mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
-
-const RP_KEY_ID = process.env.RP_KEY_ID;
-const RP_KEY_SECRET = process.env.RP_KEY_SECRET;
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-console.log('🔧 Environment Check:');
-console.log('SUPABASE_URL:', SUPABASE_URL ? '✅ Set' : '❌ Missing');
-console.log('SUPABASE_SERVICE_ROLE_KEY:', SUPABASE_SERVICE_ROLE_KEY ? '✅ Set' : '❌ Missing');
-console.log('RP_KEY_ID:', RP_KEY_ID ? '✅ Set' : '❌ Missing');
-console.log('RP_KEY_SECRET:', RP_KEY_SECRET ? '✅ Set' : '❌ Missing');
+const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID || '';
+const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error('❌ Missing Supabase env vars. Set SUPABASE_URL & SUPABASE_SERVICE_ROLE_KEY');
-  process.exit(1);
+  console.warn('⚠️ SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing in .env');
 }
 
-if (!RP_KEY_ID || !RP_KEY_SECRET) {
-  console.error('❌ Razorpay keys missing. Set RP_KEY_ID and RP_KEY_SECRET environment variables');
-  console.error('💡 Get keys from: https://dashboard.razorpay.com/app/keys');
-}
-
-const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-const razorpay = new Razorpay({ 
-  key_id: RP_KEY_ID, 
-  key_secret: RP_KEY_SECRET 
+const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false },
+  global: { headers: { 'x-client-info': 'server' } }
 });
 
-// Enhanced request logging
-app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  console.log(`📨 ${timestamp} ${req.method} ${req.path}`);
-  console.log(`   Origin: ${req.headers.origin || 'No Origin'}`);
-  console.log(`   User-Agent: ${req.headers['user-agent']?.substring(0, 50)}...`);
-  next();
+// Initialize Razorpay
+const razorpay = new Razorpay({
+  key_id: RAZORPAY_KEY_ID,
+  key_secret: RAZORPAY_KEY_SECRET
 });
 
-// Health check endpoint with detailed info
-app.get('/health', (req, res) => {
-  console.log('🏥 Health check requested');
-  res.json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    service: 'Gold Investment API',
-    version: '1.0.0',
-    razorpay: {
-      configured: !!(RP_KEY_ID && RP_KEY_SECRET),
-      key_id: RP_KEY_ID ? `${RP_KEY_ID.substring(0, 10)}...` : 'Not set'
-    },
-    supabase: {
-      configured: !!(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY),
-      url: SUPABASE_URL ? 'Set' : 'Not set'
-    },
-    endpoints: [
-      '/health',
-      '/test',
-      '/create-razorpay-order',
-      '/verify-payment',
-      '/test-payment'
-    ]
-  });
+app.use(cors({
+  origin: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+app.use(bodyParser.json({ limit: '200kb' }));
+
+// Health check endpoint
+app.get('/health', (_req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Enhanced test endpoint
-app.get('/test', (req, res) => {
-  res.json({ 
-    message: '✅ Server is working correctly!',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    server_time: new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
-  });
-});
-
-// Test payment endpoint for debugging
-app.post('/test-payment', async (req, res) => {
-  console.log('🧪 Test payment requested:', req.body);
-  
+// Session check endpoint (using Supabase's Admin API)
+app.get('/api/session', async (req, res) => {
   try {
-    const { amount = 10000 } = req.body; // Default 100 INR
-    
-    const orderOptions = {
-      amount: Math.round(Number(amount)),
+    const token = req.headers['authorization']?.split(' ')[1];  // Get token from Authorization header
+    if (!token) {
+      return res.status(400).json({ error: 'No session token provided' });
+    }
+
+    // Use the Supabase Admin API to get the user associated with the token
+    const { data, error } = await supabaseAdmin.auth.api.getUser(token);
+
+    if (error) {
+      console.error('Error fetching session:', error);
+      return res.status(400).json({ error: 'Session not found' });
+    }
+
+    res.json({ session: data }); // If valid session, return session data
+  } catch (error) {
+    console.error('Error checking session:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
+
+/**
+ * POST /create-subscription
+ * Body:
+ * {
+ *   user_id, plan_id, start_date (YYYY-MM-DD), end_date (YYYY-MM-DD)
+ * }
+ *
+ * Server inserts subscription using service key, then creates Razorpay order for first payment.
+ * Returns:
+ * { success: true, subscription_id, order: { order_id, amount, currency, key_id } }
+ */
+app.post('/create-subscription', async (req, res) => {
+  try {
+    const { user_id, plan_id, start_date, end_date } = req.body ?? {};
+    if (!user_id || !plan_id || !start_date || !end_date) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    // Load plan to get monthly_due (server trusts DB)
+    const { data: planData, error: planErr } = await supabaseAdmin
+      .from('plans')
+      .select('monthly_due, scheme_name')
+      .eq('id', plan_id)
+      .maybeSingle();
+
+    if (planErr) {
+      console.error('Plan fetch error', planErr);
+      return res.status(500).json({ success: false, message: 'Failed to read plan' });
+    }
+    if (!planData) {
+      return res.status(404).json({ success: false, message: 'Plan not found' });
+    }
+
+    const monthlyDue = Number(planData.monthly_due || 0);
+    if (monthlyDue <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid monthly_due in plan' });
+    }
+
+    // Insert subscription row with status pending
+    const insertPayload = {
+      user_id,
+      plan_id,
+      start_date,
+      end_date,
+      status: 'pending',
+      total_paid: 0,
+      bonus_amount: 0,
+      final_amount: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    const { data: insertData, error: insertErr } = await supabaseAdmin
+      .from('user_subscriptions')
+      .insert([insertPayload])
+      .select('id')
+      .limit(1);
+
+    if (insertErr) {
+      console.error('Subscription insert error', insertErr);
+      return res.status(500).json({ success: false, message: 'Failed to create subscription', details: insertErr.message });
+    }
+
+    let subscriptionId = null;
+    if (Array.isArray(insertData) && insertData.length > 0) {
+      subscriptionId = insertData[0].id;
+    } else if (insertData && insertData.id) {
+      subscriptionId = insertData.id;
+    }
+
+    if (!subscriptionId) {
+      console.error('No subscription id returned from insert', insertData);
+      return res.status(500).json({ success: false, message: 'Subscription creation returned no id' });
+    }
+
+    // Create Razorpay order for first monthly payment
+    const amountInPaise = Math.round(monthlyDue * 100); // convert to paise
+    const receiptId = `sub_${subscriptionId}_${Date.now()}`;
+
+    const options = {
+      amount: amountInPaise,
       currency: 'INR',
-      receipt: `test_rcpt_${Date.now()}`,
-      payment_capture: 1,
+      receipt: receiptId,
+      payment_capture: 1
     };
 
-    console.log('Creating test order with:', orderOptions);
-    
-    const order = await razorpay.orders.create(orderOptions);
-    
-    console.log('✅ Test order created:', order.id);
-    
-    return res.json({ 
+    const order = await razorpay.orders.create(options);
+
+    return res.json({
       success: true,
-      order_id: order.id, 
-      amount: order.amount, 
-      currency: order.currency, 
-      key_id: RP_KEY_ID,
-      message: 'Test order created successfully. Use this order_id for testing payments.'
+      subscription_id: subscriptionId,
+      order: {
+        order_id: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        key_id: RAZORPAY_KEY_ID
+      }
     });
-    
   } catch (err) {
-    console.error('❌ Test payment error:', err);
-    
-    let errorDetails = 'Unknown Razorpay error';
-    if (err.error && err.error.description) {
-      errorDetails = err.error.description;
-    } else if (err.message) {
-      errorDetails = err.message;
-    }
-    
-    return res.status(500).json({ 
-      success: false,
-      error: 'test_order_failed', 
-      details: errorDetails
-    });
+    console.error('create-subscription error', err);
+    return res.status(500).json({ success: false, message: 'Server error', details: String(err) });
   }
 });
 
-// Enhanced order creation with better error handling
-app.post('/create-razorpay-order', async (req, res) => {
-  console.log('💰 Create order request:', {
-    body: req.body,
-    headers: req.headers,
-    origin: req.headers.origin
-  });
-  
-  // Check if Razorpay keys are configured
-  if (!RP_KEY_ID || !RP_KEY_SECRET) {
-    console.error('❌ Razorpay keys not configured');
-    return res.status(500).json({ 
-      success: false,
-      error: 'RAZORPAY_KEYS_MISSING',
-      message: 'Razorpay keys not configured on server',
-      details: 'Check RP_KEY_ID and RP_KEY_SECRET environment variables'
-    });
-  }
-
-  try {
-    const { amount_in_paise, receipt_id, currency = 'INR', plan_name = 'Gold Plan' } = req.body;
-    
-    if (!amount_in_paise || isNaN(Number(amount_in_paise))) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'INVALID_AMOUNT',
-        message: 'Invalid amount_in_paise'
-      });
-    }
-
-    const amount = Math.round(Number(amount_in_paise));
-    
-    // Validate amount (Razorpay requires min 1 INR = 100 paise)
-    if (amount < 100) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'AMOUNT_TOO_SMALL',
-        message: 'Amount must be at least 100 paise (1 INR)'
-      });
-    }
-
-    const orderOptions = {
-      amount: amount,
-      currency,
-      receipt: receipt_id || `rcpt_${Date.now()}`,
-      payment_capture: 1,
-      notes: {
-        plan_name: plan_name,
-        created_at: new Date().toISOString()
-      }
-    };
-
-    console.log('🔄 Creating Razorpay order with:', orderOptions);
-    
-    const order = await razorpay.orders.create(orderOptions);
-    
-    console.log('✅ Order created successfully:', {
-      order_id: order.id,
-      amount: order.amount,
-      currency: order.currency,
-      receipt: order.receipt
-    });
-    
-    return res.json({ 
-      success: true,
-      order_id: order.id, 
-      amount: order.amount, 
-      currency: order.currency, 
-      key_id: RP_KEY_ID,
-      receipt: order.receipt
-    });
-    
-  } catch (err) {
-    console.error('❌ Create order error:', err);
-    
-    let errorCode = 'RAZORPAY_ERROR';
-    let errorMessage = 'Unknown Razorpay error';
-    let statusCode = 500;
-
-    if (err.error && err.error.description) {
-      errorMessage = err.error.description;
-      if (err.error.code === 'BAD_REQUEST_ERROR') {
-        errorCode = 'BAD_REQUEST';
-        statusCode = 400;
-      }
-    } else if (err.message) {
-      errorMessage = err.message;
-    }
-    
-    return res.status(statusCode).json({ 
-      success: false,
-      error: errorCode, 
-      message: errorMessage,
-      details: 'Check Razorpay dashboard for more details'
-    });
-  }
-});
-
-// Enhanced payment verification with better logging
+/**
+ * POST /verify-payment
+ * Body:
+ * {
+ *   razorpay_payment_id, razorpay_order_id, razorpay_signature, subscription_id
+ * }
+ *
+ * Verifies signature and updates subscription status to 'active' and stores payment details.
+ */
 app.post('/verify-payment', async (req, res) => {
-  console.log('🔍 Verify payment request:', {
-    body: req.body,
-    headers: req.headers
-  });
-  
-  if (!RP_KEY_SECRET) {
-    return res.status(500).json({ 
-      success: false, 
-      error: 'RAZORPAY_SECRET_MISSING',
-      message: 'Razorpay secret key not configured' 
-    });
-  }
-
   try {
-    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, subscription_id } = req.body;
-    
-    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'MISSING_REQUIRED_FIELDS',
-        message: 'Missing required payment fields' 
-      });
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, subscription_id } = req.body ?? {};
+    if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature || !subscription_id) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
-    console.log('🔄 Verifying payment:', {
-      payment_id: razorpay_payment_id,
-      order_id: razorpay_order_id,
-      subscription_id: subscription_id
-    });
-
-    // Verify signature
-    const generated_signature = crypto
-      .createHmac('sha256', RP_KEY_SECRET)
-      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+    // verify signature
+    const generatedSignature = crypto
+      .createHmac('sha256', RAZORPAY_KEY_SECRET)
+      .update(razorpay_order_id + '|' + razorpay_payment_id)
       .digest('hex');
-      
-    console.log('🔐 Signature verification:', {
-      received: razorpay_signature.substring(0, 20) + '...',
-      generated: generated_signature.substring(0, 20) + '...',
-      match: generated_signature === razorpay_signature
-    });
 
-    if (generated_signature !== razorpay_signature) {
-      console.warn('❌ Signature mismatch for payment:', razorpay_payment_id);
-      
-      if (subscription_id) {
-        await supabaseAdmin
-          .from('user_subscriptions')
-          .update({ 
-            status: 'failed',
-            failed_reason: 'signature_mismatch',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', subscription_id)
-          .catch(err => console.error('Failed to update subscription:', err));
-      }
-        
-      return res.status(400).json({ 
-        success: false, 
-        error: 'INVALID_SIGNATURE',
-        message: 'Payment signature verification failed' 
-      });
+    if (generatedSignature !== razorpay_signature) {
+      console.warn('Signature mismatch', { generatedSignature, razorpay_signature });
+      return res.status(400).json({ success: false, message: 'Invalid signature' });
     }
 
-    // Fetch payment details from Razorpay
-    let paymentDetails = null;
-    let amountPaise = null;
-    
+    // optional: fetch payment object from Razorpay to get amount, status etc.
+    let paymentObj = null;
     try {
-      paymentDetails = await razorpay.payments.fetch(razorpay_payment_id);
-      amountPaise = paymentDetails?.amount ?? null;
-      console.log('✅ Payment details from Razorpay:', {
-        status: paymentDetails?.status,
-        amount: paymentDetails?.amount,
-        currency: paymentDetails?.currency
-      });
-    } catch (razorpayError) {
-      console.warn('⚠️ Could not fetch payment details from Razorpay:', razorpayError);
+      paymentObj = await razorpay.payments.fetch(razorpay_payment_id);
+    } catch (fetchErr) {
+      console.warn('Could not fetch payment details from Razorpay', fetchErr);
     }
 
-    // Fetch order details if payment details not available
-    if (!amountPaise) {
-      try {
-        const order = await razorpay.orders.fetch(razorpay_order_id);
-        amountPaise = order?.amount ?? null;
-        console.log('✅ Order details from Razorpay:', {
-          amount: order?.amount,
-          currency: order?.currency
-        });
-      } catch (orderError) {
-        console.warn('⚠️ Could not fetch order details from Razorpay:', orderError);
-      }
-    }
-    
-    const amountInRupees = amountPaise !== null ? amountPaise / 100 : null;
+    // Update subscription row to active
+    const updatePayload = {
+      status: 'active',
+      total_paid: paymentObj?.amount ? (paymentObj.amount / 100) : undefined,
+      final_amount: paymentObj?.amount ? (paymentObj.amount / 100) : undefined,
+      razorpay_payment_id,
+      razorpay_order_id,
+      razorpay_signature,
+      updated_at: new Date().toISOString()
+    };
 
-    // Update subscription if provided
-    if (subscription_id) {
-      try {
-        // First, get current subscription to check user_id
-        const { data: subscriptionRow, error: subError } = await supabaseAdmin
-          .from('user_subscriptions')
-          .select('user_id, plan_id')
-          .eq('id', subscription_id)
-          .limit(1)
-          .maybeSingle();
+    // remove undefined keys
+    Object.keys(updatePayload).forEach(k => updatePayload[k] === undefined && delete updatePayload[k]);
 
-        if (subError) {
-          console.error('❌ Error fetching subscription:', subError);
-        }
+    const { error: updateErr } = await supabaseAdmin
+      .from('user_subscriptions')
+      .update(updatePayload)
+      .eq('id', subscription_id);
 
-        const userId = subscriptionRow?.user_id ?? null;
-
-        // Update subscription status
-        const updates = { 
-          status: 'active',
-          updated_at: new Date().toISOString()
-        };
-        
-        if (amountInRupees !== null) {
-          updates.total_paid = amountInRupees;
-        }
-
-        const { error: updateError } = await supabaseAdmin
-          .from('user_subscriptions')
-          .update(updates)
-          .eq('id', subscription_id);
-
-        if (updateError) {
-          console.error('❌ Error updating subscription:', updateError);
-        } else {
-          console.log('✅ Subscription updated successfully');
-        }
-
-        // Insert payment record
-        const paymentInsert = {
-          user_id: userId,
-          subscription_id,
-          amount: amountInRupees ?? undefined,
-          payment_type: 'razorpay',
-          razorpay_payment_id,
-          razorpay_order_id,
-          status: 'completed',
-          created_at: new Date().toISOString(),
-          metadata: {
-            verified_at: new Date().toISOString(),
-            signature_verified: true
-          }
-        };
-        
-        const { error: paymentError } = await supabaseAdmin
-          .from('payments')
-          .insert(paymentInsert);
-
-        if (paymentError) {
-          console.error('❌ Error inserting payment record:', paymentError);
-        } else {
-          console.log('✅ Payment record inserted successfully');
-        }
-
-      } catch (dbError) {
-        console.error('❌ Database operation error:', dbError);
-        // Don't fail the entire verification if DB operations fail
-      }
+    if (updateErr) {
+      console.error('Failed to update subscription after verify', updateErr);
+      return res.status(500).json({ success: false, message: 'Failed to update subscription', details: updateErr.message });
     }
 
-    console.log('✅ Payment verified successfully:', razorpay_payment_id);
-    
-    return res.json({ 
-      success: true, 
-      message: 'Payment verified successfully',
-      payment_id: razorpay_payment_id,
-      order_id: razorpay_order_id,
-      amount: amountInRupees,
-      verified_at: new Date().toISOString()
-    });
-    
+    return res.json({ success: true, message: 'Payment verified and subscription activated' });
   } catch (err) {
-    console.error('❌ Verify-payment error:', err);
-    
-    return res.status(500).json({ 
-      success: false, 
-      error: 'VERIFICATION_FAILED',
-      message: 'Payment verification failed',
-      details: err.message || 'Internal server error during verification'
-    });
+    console.error('verify-payment error', err);
+    return res.status(500).json({ success: false, message: 'Server error', details: String(err) });
   }
 });
 
-// New endpoint to check server connectivity from client
-app.get('/server-status', (req, res) => {
-  res.json({
-    success: true,
-    server: 'running',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development',
-    port: process.env.PORT || 3001,
-    razorpay_configured: !!(RP_KEY_ID && RP_KEY_SECRET),
-    supabase_configured: !!(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
-  });
-});
 
-// Manual preflight handler for specific routes
-const handlePreflight = (req, res) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.status(200).send();
-};
+app.get('/api/profile/:userId', async (req, res) => {
+  const { userId } = req.params;
 
-// Add preflight handlers for specific routes
-app.options('/create-razorpay-order', handlePreflight);
-app.options('/verify-payment', handlePreflight);
-app.options('/test-payment', handlePreflight);
+  // Fetch profile data from user_profile table
+  const { data, error } = await supabase
+    .from('user_profile')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
 
-// 404 handler - use a proper path instead of '*'
-app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') {
-    // Handle OPTIONS requests that don't match specific routes
-    handlePreflight(req, res);
-  } else {
-    console.log('❌ 404 - Endpoint not found:', req.method, req.originalUrl);
-    res.status(404).json({ 
-      success: false,
-      error: 'ENDPOINT_NOT_FOUND',
-      message: 'Endpoint not found',
-      path: req.originalUrl,
-      method: req.method,
-      available_endpoints: [
-        'GET /health',
-        'GET /test', 
-        'GET /server-status',
-        'POST /create-razorpay-order',
-        'POST /verify-payment',
-        'POST /test-payment'
-      ]
-    });
+  if (error) {
+    return res.status(400).json({ error: error.message });
   }
+
+  // Handle missing fields (e.g., full_name)
+  if (!data.full_name) {
+    data.full_name = 'Unnamed User';  // Default value if full_name is missing
+  }
+
+  res.json(data);  // Send profile data as response
 });
 
-// Global error handler
-app.use((err, req, res, next) => {
-  console.error('💥 Global error handler:', err);
-  res.status(500).json({
-    success: false,
-    error: 'INTERNAL_SERVER_ERROR',
-    message: 'Something went wrong on the server',
-    timestamp: new Date().toISOString()
-  });
+// API to fetch active plans
+app.get('/api/active-plans/:userId', async (req, res) => {
+  const { userId } = req.params;
+
+  // Fetch active plans from user_subscriptions table
+  const { data, error } = await supabase
+    .from('user_subscriptions')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('status', 'pending');
+
+  if (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  res.json(data);  // Send active plans data as response
+});
+app.get('/profile/:userId', async (req, res) => {
+  const { userId } = req.params;
+
+  // Fetch profile data
+  const { data, error } = await supabase
+    .from('user_profile')
+    .select('*')
+    .eq('id', userId)
+    .single(); // Get a single row
+
+  if (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  // Handle missing profile fields (example: set default 'full_name')
+  if (!data.full_name) {
+    data.full_name = 'Unnamed User';
+  }
+
+  res.json(data);
 });
 
-// Graceful shutdown handling
-process.on('SIGTERM', () => {
-  console.log('🔄 SIGTERM received, shutting down gracefully');
-  process.exit(0);
+// Endpoint to update profile data
+app.put('/profile/:userId', async (req, res) => {
+  const { userId } = req.params;
+  const { full_name, phone, referral_code } = req.body;
+
+  // Update profile fields
+  const { data, error } = await supabase
+    .from('user_profile')
+    .upsert({
+      id: userId,
+      full_name: full_name || 'Unnamed User', // Set default value if missing
+      phone,
+      referral_code,
+    })
+    .eq('id', userId);
+
+  if (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  res.json(data);
 });
 
-process.on('SIGINT', () => {
-  console.log('🔄 SIGINT received, shutting down gracefully');
-  process.exit(0);
+app.listen(PORT, () => {
+  console.log(`Payment server listening on http://lcalhost:${PORT}`);
 });
 
-// Start server
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server listening on port ${PORT}`);
-  console.log(`📍 Local: http://localhost:${PORT}`);
-  console.log(`📍 Network: http://0.0.0.0:${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
-  console.log(`🧪 Test endpoint: http://localhost:${PORT}/test`);
-  console.log(`📡 Status endpoint: http://localhost:${PORT}/server-status`);
-  console.log(`💳 Payment API: http://localhost:${PORT}/create-razorpay-order`);
-  console.log(`🔍 Verification API: http://localhost:${PORT}/verify-payment`);
-  console.log('');
-  console.log('🔧 Server Features:');
-  console.log('   ✅ Enhanced CORS for mobile apps');
-  console.log('   ✅ Detailed request logging');
-  console.log('   ✅ Robust error handling');
-  console.log('   ✅ Payment verification');
-  console.log('   ✅ Test payment endpoints');
-  console.log('');
-  console.log('⚠️  Make sure your React Native app uses the correct server URL:');
-  console.log(`   http://localhost:${PORT} or your local IP address`);
-});
-
-export default app;
