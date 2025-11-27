@@ -1,11 +1,29 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  Modal,
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+} from 'react-native';
 import { UserCircle, Phone, LogOut, Wallet, Users, Award, Shield } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { router } from 'expo-router';
+import { supabase } from '@/lib/supabase'; // ← adjust path if your client is elsewhere
 
 export default function ProfileScreen() {
   const { profile, signOut } = useAuth();
   const isAdmin = profile?.is_admin === true;
+
+  const [plansModalVisible, setPlansModalVisible] = useState(false);
+  const [activePlans, setActivePlans] = useState<any[]>([]);
+  const [loadingPlans, setLoadingPlans] = useState(false);
+  const [plansError, setPlansError] = useState<string | null>(null);
 
   const handleSignOut = () => {
     Alert.alert(
@@ -25,102 +43,167 @@ export default function ProfileScreen() {
     );
   };
 
+  // Fetch active plans for current user
+  const fetchActivePlans = async () => {
+    if (!profile?.id) {
+      setPlansError('User not found.');
+      return;
+    }
+    setLoadingPlans(true);
+    setPlansError(null);
+
+    try {
+      // Try to fetch subscriptions for the user with status 'active'
+      // Adjust table/column names to match your schema (e.g. user_subscriptions, subscriptions, status, user_id, plan_id)
+      const { data, error } = await supabase
+        .from('user_subscriptions')
+        .select('*') // change to '*, plans(*)' if you have a foreign relation to plans table
+        .eq('user_id', profile.id)
+        .eq('status', 'active');
+
+      if (error) throw error;
+      setActivePlans(data || []);
+    } catch (err: any) {
+      console.error('fetchActivePlans error', err);
+      setPlansError(err.message || 'Failed to load plans.');
+    } finally {
+      setLoadingPlans(false);
+    }
+  };
+
+
+  const openActivePlansPage = () => {
+  router.push('/active-plans'); // route path must match the file you created
+};
+
+
+  const openPlansModal = async () => {
+    setPlansModalVisible(true);
+    await fetchActivePlans();
+  };
+
+  const renderPlanItem = ({ item }: { item: any }) => {
+    // Adjust fields shown based on your subscription row structure
+    return (
+      <View style={styles.planItem}>
+        <Text style={styles.planName}>{item.plan_name || item.plan_id || 'Plan'}</Text>
+        <Text style={styles.planMeta}>
+          {`Status: ${item.status || 'active'} • Started: ${item.start_date ?? '—'}`}
+        </Text>
+        <Text style={styles.planPrice}>{item.price ? `₹${item.price}` : ''}</Text>
+      </View>
+    );
+  };
+
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Profile</Text>
-      </View>
-
-      <View style={styles.profileCard}>
-        <View style={styles.avatarContainer}>
-          <UserCircle size={80} color="#FFD700" />
+    <>
+      <ScrollView style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.title}>Profile</Text>
         </View>
-        <Text style={styles.name}>{profile?.full_name || 'Demo User'}</Text>
-        <Text style={styles.phone}>{profile?.phone_number || '1234567890'}</Text>
-        <View style={styles.badge}>
-          <Award size={16} color="#FFD700" />
-          <Text style={styles.badgeText}>{profile?.status?.toUpperCase() || 'ACTIVE'}</Text>
-        </View>
-      </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Account Details</Text>
-
-        <View style={styles.infoCard}>
-          <View style={styles.infoRow}>
-            <View style={styles.infoLeft}>
-              <Phone size={20} color="#999" />
-              <Text style={styles.infoLabel}>Phone Number</Text>
-            </View>
-            <Text style={styles.infoValue}>{profile?.phone_number || '1234567890'}</Text>
+        <View style={styles.profileCard}>
+          <View style={styles.avatarContainer}>
+            <UserCircle size={80} color="#FFD700" />
+          </View>
+          <Text style={styles.name}>{profile?.full_name || 'Demo User'}</Text>
+          <Text style={styles.phone}>{profile?.phone_number || '1234567890'}</Text>
+          <View style={styles.badge}>
+            <Award size={16} color="#FFD700" />
+            <Text style={styles.badgeText}>{profile?.status?.toUpperCase() || 'ACTIVE'}</Text>
           </View>
         </View>
 
-        <View style={styles.infoCard}>
-          <View style={styles.infoRow}>
-            <View style={styles.infoLeft}>
-              <Users size={20} color="#999" />
-              <Text style={styles.infoLabel}>Referral Code</Text>
-            </View>
-            <Text style={styles.infoValue}>{profile?.referral_code || 'REF000000'}</Text>
-          </View>
-        </View>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Account Details</Text>
 
-        {profile?.referred_by && (
           <View style={styles.infoCard}>
             <View style={styles.infoRow}>
               <View style={styles.infoLeft}>
-                <UserCircle size={20} color="#999" />
-                <Text style={styles.infoLabel}>Referred By</Text>
+                <Phone size={20} color="#999" />
+                <Text style={styles.infoLabel}>Phone Number</Text>
               </View>
-              <Text style={styles.infoValue}>Yes</Text>
+              <Text style={styles.infoValue}>{profile?.phone_number || '1234567890'}</Text>
             </View>
           </View>
-        )}
-      </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Quick Actions</Text>
+          <View style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <View style={styles.infoLeft}>
+                <Users size={20} color="#999" />
+                <Text style={styles.infoLabel}>Referral Code</Text>
+              </View>
+              <Text style={styles.infoValue}>{profile?.referral_code || 'REF000000'}</Text>
+            </View>
+          </View>
 
-        {isAdmin && (
+          {profile?.referred_by && (
+            <View style={styles.infoCard}>
+              <View style={styles.infoRow}>
+                <View style={styles.infoLeft}>
+                  <UserCircle size={20} color="#999" />
+                  <Text style={styles.infoLabel}>Referred By</Text>
+                </View>
+                <Text style={styles.infoValue}>Yes</Text>
+              </View>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Quick Actions</Text>
+
+          {isAdmin && (
+            <TouchableOpacity
+              style={[styles.actionCard, styles.adminCard]}
+              onPress={() => router.push('/admin')}
+            >
+              <Shield size={24} color="#D4AF37" />
+              <Text style={styles.actionText}>Admin Panel</Text>
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
-            style={[styles.actionCard, styles.adminCard]}
-            onPress={() => router.push('/admin')}
+            style={styles.actionCard}
+            onPress={() => router.push('/(tabs)')}
           >
-            <Shield size={24} color="#D4AF37" />
-            <Text style={styles.actionText}>Admin Panel</Text>
+            <Wallet size={24} color="#FFD700" />
+            <Text style={styles.actionText}>View Wallet</Text>
           </TouchableOpacity>
-        )}
 
-        <TouchableOpacity
-          style={styles.actionCard}
-          onPress={() => router.push('/(tabs)')}
-        >
-          <Wallet size={24} color="#FFD700" />
-          <Text style={styles.actionText}>View Wallet</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.actionCard}
+            onPress={() => router.push('/referrals')}
+          >
+            <Users size={24} color="#FFD700" />
+            <Text style={styles.actionText}>My Referrals</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.actionCard}
-          onPress={() => router.push('/referrals')}
-        >
-          <Users size={24} color="#FFD700" />
-          <Text style={styles.actionText}>My Referrals</Text>
-        </TouchableOpacity>
-      </View>
+          {/* NEW: My Active Plans */}
+          <TouchableOpacity
+  style={styles.actionCard}
+  onPress={openActivePlansPage}
+>
+  <Text style={{ fontSize: 20, color: '#FFD700', marginRight: 12 }}>📄</Text>
+  <Text style={styles.actionText}>My Active Plans</Text>
+</TouchableOpacity>
+        </View>
 
-      <View style={styles.section}>
-        <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
-          <LogOut size={20} color="#ef4444" />
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </TouchableOpacity>
-      </View>
+        <View style={styles.section}>
+          <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
+            <LogOut size={20} color="#ef4444" />
+            <Text style={styles.signOutText}>Sign Out</Text>
+          </TouchableOpacity>
+        </View>
 
-      <View style={styles.footer}>
-        <Text style={styles.footerText}>A S JEWELLERS</Text>
-        <Text style={styles.footerVersion}>Version 1.0.0</Text>
-      </View>
-    </ScrollView>
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>A S JEWELLERS</Text>
+          <Text style={styles.footerVersion}>Version 1.0.0</Text>
+        </View>
+      </ScrollView>
+
+    
+    </>
   );
 }
 
@@ -259,5 +342,31 @@ const styles = StyleSheet.create({
   footerVersion: {
     fontSize: 12,
     color: '#666',
+  },
+
+  /* Plan list styles */
+  planItem: {
+    backgroundColor: '#2a2a2a',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  planName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+    marginBottom: 6,
+  },
+  planMeta: {
+    fontSize: 13,
+    color: '#999',
+  },
+  planPrice: {
+    fontSize: 14,
+    color: '#FFD700',
+    marginTop: 8,
+    fontWeight: '600',
   },
 });

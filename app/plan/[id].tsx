@@ -11,9 +11,10 @@ import {
   SafeAreaView,
   Platform,
 } from 'react-native';
-import { TrendingUp, Calendar, DollarSign, Gift, ArrowLeft, Star, Shield, Clock, User, Server, HelpCircle, Database } from 'lucide-react-native';
+import {
+  TrendingUp, Calendar, DollarSign, Gift, ArrowLeft, Star, Shield, Clock, User, Server, HelpCircle, Database
+} from 'lucide-react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import Constants from 'expo-constants';
 import { supabase } from '@/lib/supabase';
 
 interface Plan {
@@ -29,36 +30,23 @@ interface Plan {
   wastage?: number;
 }
 
-// Use port 3001 to avoid conflicts
-const SERVER_URL = "http://localhost:3001";
+const SERVER_URL = 'http://localhost:3001';
 
-// Simple Razorpay loader for web
 const loadRazorpayScript = (): Promise<boolean> => {
   return new Promise((resolve) => {
     if (typeof window === 'undefined') {
       resolve(false);
       return;
     }
-
     if ((window as any).Razorpay) {
       resolve(true);
       return;
     }
-
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.async = true;
-
-    script.onload = () => {
-      console.log('✅ Razorpay script loaded');
-      resolve(true);
-    };
-
-    script.onerror = () => {
-      console.error('❌ Razorpay script failed to load');
-      resolve(false);
-    };
-
+    script.onload = () => { console.log('Razorpay script loaded'); resolve(true); };
+    script.onerror = () => { console.error('Razorpay script failed to load'); resolve(false); };
     document.head.appendChild(script);
   });
 };
@@ -77,145 +65,34 @@ export default function PlanDetailsPage() {
   const [razorpayReady, setRazorpayReady] = useState(false);
   const [serverStatus, setServerStatus] = useState<string>('Unknown');
 
-  const subscriptionIdRef = useRef<number | null>(null);
-
   useEffect(() => {
     if (!planId) return;
-    
     loadPlanDetails(planId);
     loadGoldRate();
     checkUserSession();
     checkServerStatus();
-    
-    // Load Razorpay script on component mount
-    if (Platform.OS === 'web') {
-      loadRazorpayScript().then(setRazorpayReady);
-    }
+    if (Platform.OS === 'web') loadRazorpayScript().then(setRazorpayReady);
   }, [planId]);
 
-  // Check user session directly
   const checkUserSession = async () => {
     try {
       const { data } = await supabase.auth.getSession();
-      console.log("User session:", data.session);
       setUserSession(data.session);
-    } catch (error) {
-      console.error("Session check error:", error);
+      console.log('User session loaded', data.session);
+    } catch (e) {
+      console.error('Session check error', e);
     }
   };
 
-  // Improved server status check
   const checkServerStatus = async () => {
     try {
       setServerStatus('Checking...');
-      
-      console.log(`Testing server connection to: ${SERVER_URL}/health`);
-      
-      const response = await fetch(`${SERVER_URL}/health`, {
-        method: 'GET',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        console.log('✅ Server health check:', data);
-        setServerStatus(`✅ Running`);
-      } else {
-        console.log('❌ Server responded with:', response.status);
-        setServerStatus(`❌ HTTP ${response.status}`);
-      }
-      
-    } catch (error: any) {
-      console.error('Server check failed:', error);
-      
-      if (error.message?.includes('Failed to fetch')) {
-        setServerStatus('❌ Cannot Connect');
-      } else if (error.message?.includes('CORS')) {
-        setServerStatus('❌ CORS Error');
-      } else {
-        setServerStatus('❌ Connection Failed');
-      }
-      
-      console.log('Connection error details:', {
-        url: `${SERVER_URL}/health`,
-        error: error.message,
-        type: error.name
-      });
-    }
-  };
-
-  const startServerInstructions = () => {
-    Alert.alert(
-      'Server Not Running',
-      `To start the payment server:\n\n1. Open Terminal/Command Prompt\n2. Navigate to your project folder\n3. Run: cd server\n4. Run: node index.js\n\nThen click "Check Server" again.`,
-      [
-        { 
-          text: 'Copy Commands', 
-          onPress: () => {
-            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-              navigator.clipboard.writeText('cd server && node index.js');
-              Alert.alert('Copied!', 'Commands copied to clipboard');
-            }
-          }
-        },
-        { text: 'Check Again', onPress: checkServerStatus },
-        { text: 'OK' }
-      ]
-    );
-  };
-
-  // Test basic network connectivity
-  const testNetworkConnectivity = async () => {
-    try {
-      Alert.alert('Network Test', 'Testing basic connectivity...');
-      
-      const externalTest = await fetch('https://jsonplaceholder.typicode.com/posts/1');
-      if (externalTest.ok) {
-        console.log('✅ External connectivity: OK');
-      }
-      
-      const methods = ['GET', 'POST'];
-      for (const method of methods) {
-        try {
-          const response = await fetch(`${SERVER_URL}/health`, { method });
-          console.log(`${method} request:`, response.status);
-        } catch (methodError) {
-          console.log(`${method} request failed:`, methodError);
-        }
-      }
-      
-      Alert.alert(
-        'Network Test Complete', 
-        'Check browser console for detailed results.'
-      );
-      
-    } catch (error) {
-      console.error('Network test failed:', error);
-      Alert.alert('Network Error', 'Cannot reach external websites. Check your internet connection.');
-    }
-  };
-
-  // Test database connection
-  const testDatabaseConnection = async () => {
-    try {
-      console.log('🧪 Testing database connection...');
-      
-      // Test subscription table access
-      const { data: testData, error: testError } = await supabase
-        .from('user_subscriptions')
-        .select('count')
-        .limit(1);
-      
-      console.log('📊 Subscription table check:', { testData, testError });
-
-      Alert.alert('Database Test', `Connection ${testError ? 'failed' : 'successful'}. Check console for details.`);
-
-    } catch (error) {
-      console.error('❌ Database test failed:', error);
-      Alert.alert('Database Error', 'Connection test failed. Check console.');
+      const resp = await fetch(`${SERVER_URL}/health`);
+      if (resp.ok) setServerStatus('✅ Running');
+      else setServerStatus(`❌ HTTP ${resp.status}`);
+    } catch (e: any) {
+      console.error('Server check failed', e);
+      setServerStatus('❌ Cannot Connect');
     }
   };
 
@@ -227,369 +104,189 @@ export default function PlanDetailsPage() {
         .order('rate_date', { ascending: false })
         .limit(1)
         .maybeSingle();
-
-      if (error) {
-        console.warn('Gold rate not available, using default:', error);
-        return;
-      }
-
-      if (data && (data as any).rate_per_gram) {
-        setGoldRate(Number((data as any).rate_per_gram));
-      }
-    } catch (err) {
-      console.warn('Gold rate fetch error, using default:', err);
-    }
+      if (!error && data && (data as any).rate_per_gram) setGoldRate(Number((data as any).rate_per_gram));
+    } catch (e) { /* ignore */ }
   };
 
   const loadPlanDetails = async (id: number) => {
     try {
       setLoading(true);
       const { data, error } = await supabase.from('plans').select('*').eq('id', id).maybeSingle();
-      if (error) {
-        console.error('Error fetching plan details:', error);
-        Alert.alert('Error', 'Failed to load plan details');
-        return;
-      }
+      if (error) { console.error('Plan fetch error', error); Alert.alert('Error', 'Failed to load plan'); return; }
       if (!data) setPlan(null);
-      else
-        setPlan({
-          id: Number(data.id),
-          scheme_name: data.scheme_name,
-          monthly_due: Number(data.monthly_due || 0),
-          total_months: Number(data.total_months || 0),
-          payment_months: Number(data.payment_months ?? data.total_months ?? 0),
-          bonus: Number(data.bonus ?? 0),
-          bonus_percentage: Number(data.bonus_percentage ?? 0),
-          description: data.description ?? '',
-          gst: Number(data.gst ?? 0),
-          wastage: Number(data.wastage ?? 0),
-        } as Plan);
-    } catch (err) {
-      console.error('Error:', err);
-      Alert.alert('Error', 'Something went wrong');
-    } finally {
-      setLoading(false);
+      else setPlan({
+        id: Number(data.id),
+        scheme_name: data.scheme_name,
+        monthly_due: Number(data.monthly_due || 0),
+        total_months: Number(data.total_months || 0),
+        payment_months: Number(data.payment_months ?? data.total_months ?? 0),
+        bonus: Number(data.bonus ?? 0),
+        bonus_percentage: Number(data.bonus_percentage ?? 0),
+        description: data.description ?? '',
+        gst: Number(data.gst ?? 0),
+        wastage: Number(data.wastage ?? 0),
+      } as Plan);
+    } catch (e) {
+      console.error('loadPlanDetails error', e);
+    } finally { setLoading(false); }
+  };
+
+  // small fetch-with-timeout helper
+  const timeoutFetch = async (url: string, init: RequestInit = {}, ms = 15000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), ms);
+    try {
+      const resp = await fetch(url, { signal: controller.signal, ...init });
+      clearTimeout(id);
+      return resp;
+    } catch (e) {
+      clearTimeout(id);
+      throw e;
     }
   };
 
+  // NEW approach:
+  // 1) ask server to create subscription row (server inserts with service_role key) and create razorpay order
+  // 2) server returns subscription_id + order info
+  // 3) client opens Razorpay, on success calls server /verify-payment
   const handleSubscribe = async () => {
-    if (!plan) {
-      Alert.alert('Error', 'Plan not loaded');
-      return;
-    }
-
+    if (!plan) { Alert.alert('Error', 'Plan not loaded'); return; }
     if (!userSession) {
-      Alert.alert(
-        'Login Required',
-        'Please login to subscribe to a plan.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Login', onPress: () => router.push('/auth') }
-        ]
-      );
+      Alert.alert('Login required', 'Please login to subscribe.', [{ text: 'Login', onPress: () => router.push('/auth') }, { text: 'Cancel', style: 'cancel' }]);
       return;
     }
-
-    if (Platform.OS === 'web' && !razorpayReady) {
-      Alert.alert('Error', 'Payment gateway is not ready. Please try again.');
-      return;
-    }
-
+    if (Platform.OS === 'web' && !razorpayReady) { Alert.alert('Error', 'Payment gateway not ready'); return; }
     if (!serverStatus.includes('✅')) {
-      Alert.alert(
-        'Server Not Ready', 
-        'Payment server is not available. Please start the server first.',
-        [
-          { text: 'Start Server', onPress: startServerInstructions },
-          { text: 'Cancel', style: 'cancel' }
-        ]
-      );
+      Alert.alert('Server not running', 'Start the payment server and try again.', [{ text: 'Check', onPress: checkServerStatus }]);
       return;
     }
 
     setActionLoading(true);
-    let subscriptionId: number | null = null;
-
     try {
-      console.log('🚀 Starting subscription process...');
-      console.log('👤 User ID:', userSession.user.id);
-
-      // 1) Create subscription directly (no foreign key constraints now)
+      console.log('Requesting server to create subscription + order...');
+      // prepare dates
       const startDate = new Date();
       const endDate = new Date();
-      endDate.setMonth(endDate.getMonth() + plan.total_months);
+      endDate.setMonth(endDate.getMonth() + (Number(plan.total_months) || 1));
 
-      console.log('📝 Creating subscription record...');
-      const { data: subData, error: subError } = await supabase
-        .from('user_subscriptions')
-        .insert({
+      // call server to create subscription row and razorpay order
+      const createResp = await timeoutFetch(`${SERVER_URL}/create-subscription`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           user_id: userSession.user.id,
-          plan_id: plan.id,
+          plan_id: Number(plan.id),
           start_date: startDate.toISOString().split('T')[0],
           end_date: endDate.toISOString().split('T')[0],
-          status: 'pending',
-          total_paid: 0,
-          bonus_amount: plan.bonus ?? 0,
-          final_amount: 0,
-        })
-        .select()
-        .single();
-
-      if (subError) {
-        console.error('❌ Subscription error:', subError);
-        Alert.alert('Error', `Failed to create subscription: ${subError.message}`);
-        return;
-      }
-
-      subscriptionId = (subData as any).id;
-      console.log('✅ Subscription created successfully:', subscriptionId);
-
-      // 2) Create Razorpay order
-      const amountInPaise = Math.round(plan.monthly_due * 100);
-      console.log('💰 Creating order for amount:', amountInPaise);
-
-      const createResp = await fetch(`${SERVER_URL}/create-razorpay-order`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          amount_in_paise: amountInPaise, 
-          receipt_id: `sub_${subscriptionId}`
+          // optionally pass monthly amount etc.
         }),
-      });
+      }, 20000);
 
       if (!createResp.ok) {
-        const errorText = await createResp.text();
-        console.error('❌ Order creation failed:', createResp.status, errorText);
-        
-        let errorMessage = `Order creation failed: ${createResp.status}`;
-        try {
-          const errorData = JSON.parse(errorText);
-          errorMessage = errorData.error || errorData.details || errorMessage;
-        } catch (e) {
-          // Not JSON, use text as is
-        }
-        
-        throw new Error(errorMessage);
+        const txt = await createResp.text().catch(() => '');
+        console.error('create-subscription failed', createResp.status, txt);
+        throw new Error(`Server create-subscription failed: ${createResp.status} ${txt}`);
       }
 
-      const orderData = await createResp.json();
-      console.log('✅ Order response:', orderData);
+      const createJson = await createResp.json();
+      console.log('create-subscription response:', createJson);
 
-      const { order_id, amount, currency, key_id } = orderData;
-
-      if (!order_id || !key_id) {
-        throw new Error('Invalid response from payment server');
+      if (!createJson.success) {
+        throw new Error(createJson.message || 'Server failed to create subscription');
       }
 
-      // 3) Prepare user data for payment
-      const userData = {
-        name: userSession.user.user_metadata?.full_name || 
-              userSession.user.user_metadata?.name || 
-              'Customer',
-        email: userSession.user.email || 'customer@example.com',
-        phone: userSession.user.user_metadata?.phone || '9999999999'
-      };
+      const subscriptionId = createJson.subscription_id;
+      const order = createJson.order;
+      if (!subscriptionId || !order || !order.order_id || !order.key_id) {
+        throw new Error('Server returned invalid subscription/order data');
+      }
 
-      console.log('🎯 Opening payment gateway...');
+      // open Razorpay on web
+      if (Platform.OS === 'web') {
+        const userData = {
+          name: userSession.user.user_metadata?.full_name || userSession.user.user_metadata?.name || userSession.user.email?.split('@')[0] || 'Customer',
+          email: userSession.user.email || 'customer@example.com',
+          contact: userSession.user.user_metadata?.phone || '9999999999'
+        };
 
-      // 4) Open Razorpay
-      const paymentResult = await new Promise((resolve) => {
-        try {
-          const options = {
-            key: key_id,
-            amount: amount.toString(),
-            currency: currency,
-            order_id: order_id,
-            name: 'AS Jewellers',
-            description: plan.scheme_name,
-            prefill: {
-              name: userData.name,
-              email: userData.email,
-              contact: userData.phone,
-            },
-            theme: {
-              color: '#F6C24A'
-            },
-            handler: async (response: any) => {
-              console.log('✅ Payment successful:', response);
-              try {
-                // Verify payment with server
-                const verifyResponse = await fetch(`${SERVER_URL}/verify-payment`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({
-                    razorpay_payment_id: response.razorpay_payment_id,
-                    razorpay_order_id: response.razorpay_order_id,
-                    razorpay_signature: response.razorpay_signature,
-                    subscription_id: subscriptionId,
-                  }),
-                });
-                const result = await verifyResponse.json();
-                
-                if (result.success) {
-                  // Update subscription status on successful payment
-                  try {
-                    const { error: updateError } = await supabase
-                      .from('user_subscriptions')
-                      .update({ 
-                        status: 'active', 
-                        total_paid: plan.monthly_due 
-                      })
-                      .eq('id', subscriptionId);
-                      
-                    if (updateError) {
-                      console.error('❌ Failed to activate subscription:', updateError);
-                    }
-                  } catch (updateError) {
-                    console.error('❌ Error updating subscription:', updateError);
+        const paymentResult = await new Promise<{ success: boolean; message?: string }>(resolve => {
+          try {
+            const options = {
+              key: order.key_id,
+              amount: String(order.amount),
+              currency: order.currency || 'INR',
+              order_id: order.order_id,
+              name: 'AS Jewellers',
+              description: `Subscription ${plan.scheme_name}`,
+              prefill: { name: userData.name, email: userData.email, contact: userData.contact },
+              theme: { color: '#F6C24A' },
+              handler: async (response: any) => {
+                console.log('Razorpay handler response:', response);
+                try {
+                  // call server verify endpoint
+                  const verifyResp = await timeoutFetch(`${SERVER_URL}/verify-payment`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      razorpay_payment_id: response.razorpay_payment_id,
+                      razorpay_order_id: response.razorpay_order_id,
+                      razorpay_signature: response.razorpay_signature,
+                      subscription_id: subscriptionId,
+                    })
+                  }, 20000);
+
+                  if (!verifyResp.ok) {
+                    const t = await verifyResp.text().catch(() => '');
+                    console.error('verify failed', verifyResp.status, t);
+                    resolve({ success: false, message: 'Payment verification failed (server)' });
+                    return;
                   }
-                  
-                  resolve({ success: true, message: 'Subscription activated successfully!' });
-                } else {
-                  resolve({ success: false, message: 'Payment verification failed' });
+
+                  const vjson = await verifyResp.json();
+                  console.log('verify response', vjson);
+                  if (vjson.success) resolve({ success: true });
+                  else resolve({ success: false, message: vjson.message || 'Verification failed' });
+                } catch (e) {
+                  console.error('verify exception', e);
+                  resolve({ success: false, message: 'Verification exception' });
                 }
-              } catch (error) {
-                console.error('❌ Verification error:', error);
-                resolve({ success: false, message: 'Payment verification failed' });
-              }
-            },
-            modal: {
-              ondismiss: () => {
-                console.log('❌ Payment modal closed');
-                resolve({ success: false, message: 'Payment cancelled' });
               },
-            },
-          };
+              modal: { ondismiss: () => { console.log('Payment modal dismissed'); resolve({ success: false, message: 'Payment cancelled' }); } }
+            };
 
-          console.log('🔓 Opening Razorpay with options:', options);
-          const razorpay = new (window as any).Razorpay(options);
-          razorpay.open();
+            const rzp = new (window as any).Razorpay(options);
+            rzp.open();
+          } catch (e) {
+            console.error('Razorpay init error', e);
+            resolve({ success: false, message: 'Payment init error' });
+          }
+        });
 
-        } catch (error: any) {
-          console.error('❌ Razorpay error:', error);
-          resolve({ success: false, message: error.message || 'Payment failed' });
+        if (paymentResult.success) {
+          Alert.alert('Success', 'Subscription activated', [{ text: 'View Subscriptions', onPress: () => router.push('/subscriptions') }, { text: 'OK' }]);
+        } else {
+          throw new Error(paymentResult.message || 'Payment failed');
         }
-      });
-
-      console.log('📊 Payment result:', paymentResult);
-
-      // 5) Handle final result
-      if (paymentResult.success) {
-        Alert.alert(
-          'Success! 🎉',
-          'Your subscription has been activated successfully!',
-          [
-            { 
-              text: 'View Subscriptions', 
-              onPress: () => router.push('/subscriptions') 
-            },
-            { 
-              text: 'OK', 
-              style: 'default' 
-            }
-          ]
-        );
       } else {
-        throw new Error(paymentResult.message || 'Payment failed');
+        // For native platforms: implement native SDK flow (not covered here)
+        throw new Error('Native payment flow not implemented (web only supported in this file)');
       }
-
     } catch (err: any) {
-      console.error('❌ Subscription error:', err);
-      Alert.alert('Payment Failed', err.message || 'Something went wrong. Please try again.');
-
-      // Cleanup on failure
-      if (subscriptionId) {
-        try {
-          await supabase
-            .from('user_subscriptions')
-            .update({ status: 'failed' })
-            .eq('id', subscriptionId);
-        } catch (cleanupError) {
-          console.error('❌ Cleanup error:', cleanupError);
-        }
-      }
-
+      console.error('Subscription error', err);
+      Alert.alert('Payment Failed', err?.message || 'Something went wrong');
     } finally {
       setActionLoading(false);
     }
   };
 
-  // Test payment directly
+  // Short test helper (calls server health)
   const testPayment = async () => {
     if (Platform.OS !== 'web') return;
-
     try {
       await loadRazorpayScript();
-      
-      console.log('🧪 Creating test order...');
-      
-      const createResp = await fetch(`${SERVER_URL}/create-razorpay-order`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          amount_in_paise: 10000,
-          receipt_id: `test_${Date.now()}`
-        }),
-      });
-
-      if (!createResp.ok) {
-        const errorText = await createResp.text();
-        console.error('❌ Test order creation failed:', createResp.status, errorText);
-        Alert.alert('Server Error', `Cannot create test order: ${createResp.status}`);
-        return;
-      }
-
-      const orderData = await createResp.json();
-      console.log('✅ Test order response:', orderData);
-
-      const { order_id, amount, currency, key_id } = orderData;
-
-      if (!order_id || !key_id) {
-        Alert.alert('Error', 'Invalid response from server');
-        return;
-      }
-
-      const options = {
-        key: key_id,
-        amount: amount.toString(),
-        currency: currency,
-        order_id: order_id,
-        name: 'AS Jewellers',
-        description: 'Test Payment',
-        handler: function(response: any) {
-          alert('✅ Payment successful!\nPayment ID: ' + response.razorpay_payment_id);
-          console.log('✅ Test payment success:', response);
-        },
-        prefill: {
-          name: 'Test User',
-          email: 'test@example.com',
-          contact: '9999999999'
-        },
-        theme: {
-          color: '#F6C24A'
-        },
-        modal: {
-          ondismiss: function() {
-            console.log('❌ Test payment cancelled');
-            alert('Payment cancelled');
-          }
-        }
-      };
-
-      console.log('🔓 Opening test payment with order:', order_id);
-      const razorpay = new (window as any).Razorpay(options);
-      razorpay.open();
-      
-    } catch (error: any) {
-      console.error('❌ Test payment failed:', error);
-      Alert.alert('Payment Failed', error.message || 'Could not open payment gateway.');
-    }
+      const resp = await fetch(`${SERVER_URL}/health`);
+      Alert.alert('Server', resp.ok ? 'Running' : `Status ${resp.status}`);
+    } catch (e) { Alert.alert('Server Error', String(e)); }
   };
 
   if (loading) {
@@ -629,72 +326,30 @@ export default function PlanDetailsPage() {
           <View style={styles.headerPlaceholder} />
         </View>
 
-        {/* Status Card */}
         <View style={styles.statusCard}>
           <View style={styles.statusHeader}>
             <User size={18} color={userSession ? "#4CAF50" : "#ff6b6b"} />
-            <Text style={styles.statusTitle}>
-              {userSession ? 'Logged In' : 'Not Logged In'}
-            </Text>
+            <Text style={styles.statusTitle}>{userSession ? 'Logged In' : 'Not Logged In'}</Text>
           </View>
-          
+
           <View style={styles.statusRow}>
             <Server size={14} color={serverStatus.includes('✅') ? "#4CAF50" : "#ff6b6b"} />
             <Text style={styles.statusText}>Server: {serverStatus}</Text>
           </View>
-          
+
           <Text style={styles.serverUrl}>URL: {SERVER_URL}</Text>
-          
-          <View style={styles.statusRow}>
-            <Text style={styles.statusText}>Razorpay: {razorpayReady ? '✅ Ready' : '⏳ Loading...'}</Text>
-          </View>
-          
+
           <View style={styles.debugButtons}>
-            <TouchableOpacity 
-              style={[styles.debugButton, styles.testButton]}
-              onPress={testPayment}
-              disabled={!serverStatus.includes('✅')}
-            >
+            <TouchableOpacity style={[styles.debugButton, styles.testButton]} onPress={testPayment}>
               <Text style={styles.debugButtonText}>Test Payment</Text>
             </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={[styles.debugButton, styles.serverButton]}
-              onPress={checkServerStatus}
-            >
+            <TouchableOpacity style={[styles.debugButton, styles.serverButton]} onPress={checkServerStatus}>
               <Text style={styles.debugButtonText}>Check Server</Text>
             </TouchableOpacity>
           </View>
-
-          <View style={styles.debugButtons}>
-            <TouchableOpacity 
-              style={[styles.debugButton, styles.networkButton]}
-              onPress={testNetworkConnectivity}
-            >
-              <Text style={styles.debugButtonText}>Test Network</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.debugButton, styles.databaseButton]}
-              onPress={testDatabaseConnection}
-            >
-              <Database size={14} color="#fff" />
-              <Text style={styles.debugButtonText}>Test Database</Text>
-            </TouchableOpacity>
-          </View>
-          
-          {!serverStatus.includes('✅') && (
-            <TouchableOpacity 
-              style={[styles.debugButton, styles.helpButton]}
-              onPress={startServerInstructions}
-            >
-              <HelpCircle size={14} color="#fff" />
-              <Text style={styles.debugButtonText}>How to Start Server</Text>
-            </TouchableOpacity>
-          )}
         </View>
 
-        {/* Plan Details */}
+        {/* Plan Card */}
         <View style={styles.planCard}>
           <View style={styles.planHeader}>
             <TrendingUp size={32} color="#FFD700" />
@@ -714,7 +369,6 @@ export default function PlanDetailsPage() {
                 <Text style={styles.featureValue}>₹{plan.monthly_due} = {goldPerMonth}mg gold</Text>
               </View>
             </View>
-
             <View style={styles.featureItem}>
               <Calendar size={20} color="#FFD700" />
               <View style={styles.featureTextContainer}>
@@ -722,15 +376,6 @@ export default function PlanDetailsPage() {
                 <Text style={styles.featureValue}>{plan.total_months} months total</Text>
               </View>
             </View>
-
-            <View style={styles.featureItem}>
-              <Clock size={20} color="#FFD700" />
-              <View style={styles.featureTextContainer}>
-                <Text style={styles.featureTitle}>Payment Period</Text>
-                <Text style={styles.featureValue}>{plan.payment_months} months</Text>
-              </View>
-            </View>
-
             <View style={styles.featureItem}>
               <Gift size={20} color="#FFD700" />
               <View style={styles.featureTextContainer}>
@@ -741,96 +386,23 @@ export default function PlanDetailsPage() {
           </View>
         </View>
 
-        {/* Investment Summary */}
+        {/* Summary */}
         <View style={styles.calculationCard}>
           <Text style={styles.sectionTitle}>Investment Summary</Text>
-          <View style={styles.calcRow}>
-            <Text style={styles.calcLabel}>Monthly Payment</Text>
-            <Text style={styles.calcValue}>₹{plan.monthly_due}</Text>
-          </View>
-          <View style={styles.calcRow}>
-            <Text style={styles.calcLabel}>Payment Months</Text>
-            <Text style={styles.calcValue}>{plan.payment_months} months</Text>
-          </View>
-          <View style={styles.calcRow}>
-            <Text style={styles.calcLabel}>Total Investment</Text>
-            <Text style={styles.calcValue}>₹{totalToPay.toFixed(2)}</Text>
-          </View>
-          <View style={styles.calcRow}>
-            <Text style={styles.calcLabel}>Gold Accumulated</Text>
-            <Text style={styles.calcValue}>{totalGold}mg</Text>
-          </View>
-          <View style={[styles.calcRow, styles.totalRow]}>
-            <Text style={styles.totalLabel}>Total Gold with Bonus</Text>
-            <Text style={styles.totalValue}>
-              {(parseFloat(totalGold) / 1000 + parseFloat(bonusGoldGrams || '0')).toFixed(3)}g
-            </Text>
-          </View>
+          <View style={styles.calcRow}><Text style={styles.calcLabel}>Monthly Payment</Text><Text style={styles.calcValue}>₹{plan.monthly_due}</Text></View>
+          <View style={styles.calcRow}><Text style={styles.calcLabel}>Payment Months</Text><Text style={styles.calcValue}>{plan.payment_months} months</Text></View>
+          <View style={styles.calcRow}><Text style={styles.calcLabel}>Total Investment</Text><Text style={styles.calcValue}>₹{totalToPay.toFixed(2)}</Text></View>
+          <View style={[styles.calcRow, styles.totalRow]}><Text style={styles.totalLabel}>Total Gold with Bonus</Text><Text style={styles.totalValue}>{(parseFloat(totalGold)/1000 + parseFloat(bonusGoldGrams||'0')).toFixed(3)}g</Text></View>
         </View>
 
-        {/* Plan Description */}
-        <View style={styles.descriptionCard}>
-          <Text style={styles.sectionTitle}>Plan Description</Text>
-          <Text style={styles.fullDescription}>{plan.description}</Text>
-        </View>
-
-        {/* Features & Benefits */}
-        <View style={styles.benefitsCard}>
-          <Text style={styles.sectionTitle}>Features & Benefits</Text>
-          <View style={styles.benefitItem}>
-            <Star size={16} color="#FFD700" />
-            <Text style={styles.benefitText}>Secure gold investment with monthly payments</Text>
-          </View>
-          <View style={styles.benefitItem}>
-            <Star size={16} color="#FFD700" />
-            <Text style={styles.benefitText}>Company bonus on completion</Text>
-          </View>
-          <View style={styles.benefitItem}>
-            <Star size={16} color="#FFD700" />
-            <Text style={styles.benefitText}>Flexible payment options</Text>
-          </View>
-          <View style={styles.benefitItem}>
-            <Star size={16} color="#FFD700" />
-            <Text style={styles.benefitText}>Gold delivered at current market rate</Text>
-          </View>
-        </View>
-
-        {/* Terms & Conditions */}
-        <View style={styles.termsCard}>
-          <Text style={styles.sectionTitle}>Terms & Conditions</Text>
-          <View style={styles.termItem}>
-            <Shield size={16} color="#999" />
-            <Text style={styles.termText}>Plan cannot be cancelled once started</Text>
-          </View>
-          <View style={styles.termItem}>
-            <Shield size={16} color="#999" />
-            <Text style={styles.termText}>Gold will be delivered after {plan.total_months} months</Text>
-          </View>
-          <View style={styles.termItem}>
-            <Shield size={16} color="#999" />
-            <Text style={styles.termText}>Bonus applicable only on timely payments</Text>
-          </View>
-        </View>
-
-        {/* Subscribe Button */}
         <TouchableOpacity
-          style={[
-            styles.subscribeButton, 
-            (!userSession || actionLoading || !serverStatus.includes('✅')) && styles.subscribeButtonDisabled
-          ]}
+          style={[styles.subscribeButton, (!userSession || actionLoading || !serverStatus.includes('✅')) && styles.subscribeButtonDisabled]}
           onPress={handleSubscribe}
           disabled={!userSession || actionLoading || !serverStatus.includes('✅')}
         >
-          {actionLoading ? (
-            <ActivityIndicator color="#1a1a1a" />
-          ) : !userSession ? (
-            <Text style={styles.subscribeButtonText}>Login to Subscribe</Text>
-          ) : !serverStatus.includes('✅') ? (
-            <Text style={styles.subscribeButtonText}>Server Not Available</Text>
-          ) : (
-            <Text style={styles.subscribeButtonText}>Subscribe to this Plan</Text>
-          )}
+          {actionLoading ? <ActivityIndicator color="#1a1a1a" /> : <Text style={styles.subscribeButtonText}>Subscribe to this Plan</Text>}
         </TouchableOpacity>
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -846,56 +418,16 @@ const styles = StyleSheet.create({
   backButton: { padding: 8 },
   headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
   headerPlaceholder: { width: 40 },
-  statusCard: { 
-    backgroundColor: '#2a2a2a', 
-    margin: 16, 
-    padding: 16, 
-    borderRadius: 12, 
-    borderLeftWidth: 4, 
-    borderLeftColor: '#FFD700' 
-  },
+  statusCard: { backgroundColor: '#2a2a2a', margin: 16, padding: 16, borderRadius: 12, borderLeftWidth: 4, borderLeftColor: '#FFD700' },
   statusHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   statusTitle: { fontSize: 16, fontWeight: 'bold', color: '#fff', marginLeft: 8 },
   statusRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   statusText: { fontSize: 14, color: '#ccc', marginLeft: 8 },
-  serverUrl: {
-    fontSize: 10,
-    color: '#888',
-    fontFamily: 'monospace',
-    marginBottom: 8,
-    marginLeft: 22,
-  },
-  debugButtons: { 
-    flexDirection: 'row', 
-    gap: 8,
-    marginTop: 12
-  },
-  debugButton: { 
-    flex: 1, 
-    padding: 10, 
-    borderRadius: 6,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 6
-  },
-  testButton: {
-    backgroundColor: '#4CAF50', 
-  },
-  serverButton: {
-    backgroundColor: '#2196F3'
-  },
-  networkButton: {
-    backgroundColor: '#9C27B0',
-  },
-  databaseButton: {
-    backgroundColor: '#607D8B',
-  },
-  helpButton: {
-    backgroundColor: '#FF5722',
-    marginTop: 8,
-  },
-  debugButtonText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+  serverUrl: { fontSize: 10, color: '#888', fontFamily: 'monospace', marginBottom: 8, marginLeft: 22 },
+  debugButtons: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  debugButton: { flex: 1, padding: 10, borderRadius: 6, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  testButton: { backgroundColor: '#4CAF50' },
+  serverButton: { backgroundColor: '#2196F3' },
   planCard: { backgroundColor: '#2a2a2a', margin: 16, padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#333' },
   planHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   planName: { fontSize: 24, fontWeight: 'bold', color: '#FFD700', marginLeft: 12 },
@@ -908,9 +440,6 @@ const styles = StyleSheet.create({
   featureTitle: { fontSize: 14, color: '#999', marginBottom: 2 },
   featureValue: { fontSize: 16, color: '#fff', fontWeight: '600' },
   calculationCard: { backgroundColor: '#2a2a2a', margin: 16, padding: 20, borderRadius: 16 },
-  descriptionCard: { backgroundColor: '#2a2a2a', margin: 16, padding: 20, borderRadius: 16 },
-  benefitsCard: { backgroundColor: '#2a2a2a', margin: 16, padding: 20, borderRadius: 16 },
-  termsCard: { backgroundColor: '#2a2a2a', margin: 16, padding: 20, borderRadius: 16, marginBottom: 32 },
   sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#FFD700', marginBottom: 16 },
   calcRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#333' },
   calcLabel: { fontSize: 14, color: '#999' },
@@ -918,11 +447,6 @@ const styles = StyleSheet.create({
   totalRow: { borderBottomWidth: 0, marginTop: 8, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#333' },
   totalLabel: { fontSize: 16, color: '#fff', fontWeight: 'bold' },
   totalValue: { fontSize: 16, color: '#FFD700', fontWeight: 'bold' },
-  fullDescription: { fontSize: 16, color: '#fff', lineHeight: 24 },
-  benefitItem: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
-  benefitText: { fontSize: 14, color: '#fff', marginLeft: 12, flex: 1, lineHeight: 20 },
-  termItem: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
-  termText: { fontSize: 14, color: '#999', marginLeft: 12, flex: 1, lineHeight: 20 },
   subscribeButton: { backgroundColor: '#FFD700', margin: 16, padding: 18, borderRadius: 12, alignItems: 'center' },
   subscribeButtonDisabled: { backgroundColor: '#666' },
   subscribeButtonText: { color: '#1a1a1a', fontSize: 18, fontWeight: 'bold' },

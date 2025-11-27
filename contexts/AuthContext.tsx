@@ -20,6 +20,7 @@ type AuthContextValue = {
   user: any | null;
   profile: Profile;
   loading: boolean;
+  setProfile: (profile: Profile) => void; // Add setProfile to the context value
   signInWithPassword: (phone: string, password: string) => Promise<{ error?: string | null }>;
   signOut: () => Promise<void>;
   reloadProfile: () => Promise<void>;
@@ -54,7 +55,7 @@ const storage = {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<any | null>(null);
-  const [profile, setProfile] = useState<Profile>(null);
+  const [profile, setProfile] = useState<Profile>(null); // Ensure state is set
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -101,19 +102,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const fetchProfile = async (userId: string) => {
     try {
       const { data, error } = await supabase
-        .from('profiles')
+        .from('user_profile') // Update to fetch from 'user_profile' table
         .select('*')
         .eq('id', userId)
         .maybeSingle();
 
-      if (!error && data) {
-        setProfile(data);
-      } else {
-        setProfile(null);
+      if (error) {
+        console.error('Error fetching profile:', error);
+        setProfile(null);  // In case of error, set profile to null
+        return;
       }
+
+      setProfile(data);  // Set the profile from context
     } catch (e) {
-      console.warn('fetchProfile error', e);
-      setProfile(null);
+      console.warn('Error fetching profile:', e);
+      setProfile(null);  // Set profile to null if error
     }
   };
 
@@ -170,7 +173,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signInWithPassword, signOut, reloadProfile }}>
+    <AuthContext.Provider value={{ user, profile, loading, setProfile, signInWithPassword, signOut, reloadProfile }}>
       {children}
     </AuthContext.Provider>
   );
