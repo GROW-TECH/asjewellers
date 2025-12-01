@@ -1,186 +1,110 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { Platform } from 'react-native';
-import * as SecureStore from 'expo-secure-store';
+// contexts/AuthContext.tsx
+import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { ReactNode } from 'react';
 
-type Profile = {
-  id: string;
-  full_name?: string;
-  fullName?: string;
-  phone?: string;
-  phone_number?: string;
-  referral_code?: string;
-  referred_by?: string | null;
-  status?: string;
-  is_admin?: boolean;
-} | null;
+type Profile = any;
 
-type AuthContextValue = {
-  user: any | null;
-  profile: Profile;
+type AuthContextType = {
+  profile: Profile | null;
   loading: boolean;
-  setProfile: (profile: Profile) => void; // Add setProfile to the context value
-  signInWithPassword: (phone: string, password: string) => Promise<{ error?: string | null }>;
+  setProfile: (p: Profile | null) => void;
   signOut: () => Promise<void>;
-  reloadProfile: () => Promise<void>;
 };
 
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+const AuthContext = createContext<AuthContextType>({
+  profile: null,
+  loading: true,
+  setProfile: () => {},
+  signOut: async () => {},
+});
 
-const SESSION_KEY = 'supabase_session_v1';
-
-const storage = {
-  getItem: async (key: string): Promise<string | null> => {
-    if (Platform.OS === 'web') {
-      return localStorage.getItem(key);
-    }
-    return await SecureStore.getItemAsync(key);
-  },
-  setItem: async (key: string, value: string): Promise<void> => {
-    if (Platform.OS === 'web') {
-      localStorage.setItem(key, value);
-    } else {
-      await SecureStore.setItemAsync(key, value);
-    }
-  },
-  removeItem: async (key: string): Promise<void> => {
-    if (Platform.OS === 'web') {
-      localStorage.removeItem(key);
-    } else {
-      await SecureStore.deleteItemAsync(key);
-    }
-  },
-};
+export const useAuth = () => useContext(AuthContext);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<any | null>(null);
-  const [profile, setProfile] = useState<Profile>(null); // Ensure state is set
-  const [loading, setLoading] = useState(true);
+  const [profile, setProfileState] = useState<Profile | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const raw = await storage.getItem(SESSION_KEY);
-        if (raw) {
-          const session = JSON.parse(raw);
-          await supabase.auth.setSession({
-            access_token: session.access_token,
-            refresh_token: session.refresh_token,
-          });
-          const userRes = await supabase.auth.getUser();
-          const currentUser = userRes?.data?.user ?? null;
-          setUser(currentUser);
-          if (currentUser) {
-            await fetchProfile(currentUser.id);
-          }
-        }
-      } catch (e) {
-        console.warn('Failed to restore session', e);
-      } finally {
-        setLoading(false);
-      }
-    })();
-
-    const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (session?.user) {
-        setUser(session.user);
-        await fetchProfile(session.user.id);
-        await storage.setItem(SESSION_KEY, JSON.stringify(session));
-      } else {
-        setUser(null);
-        setProfile(null);
-        await storage.removeItem(SESSION_KEY);
-      }
-    });
-
-    return () => {
-      listener?.subscription?.unsubscribe?.();
-    };
-  }, []);
-
-  const fetchProfile = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('user_profile') // Update to fetch from 'user_profile' table
-        .select('*')
-        .eq('id', userId)
-        .maybeSingle();
-
-      if (error) {
-        console.error('Error fetching profile:', error);
-        setProfile(null);  // In case of error, set profile to null
-        return;
-      }
-
-      setProfile(data);  // Set the profile from context
-    } catch (e) {
-      console.warn('Error fetching profile:', e);
-      setProfile(null);  // Set profile to null if error
-    }
-  };
-
-  const reloadProfile = async () => {
-    const userRes = await supabase.auth.getUser();
-    const currentUser = userRes?.data?.user ?? null;
-    setUser(currentUser);
-    if (currentUser) {
-      await fetchProfile(currentUser.id);
-    } else {
-      setProfile(null);
-    }
-  };
-
-  const signInWithPassword = async (phone: string, password: string) => {
-    try {
-      const sanitizedPhone = String(phone).replace(/\D+/g, '');
-      const emailForAuth = `${sanitizedPhone}@asjewellers.app`;
-
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: emailForAuth,
-        password,
-      });
-
-      if (error) {
-        return { error: error.message };
-      }
-
-      if (data.session) {
-        await storage.setItem(SESSION_KEY, JSON.stringify(data.session));
-        setUser(data.user);
-        if (data.user) {
-          await fetchProfile(data.user.id);
-        }
-        return { error: null };
-      }
-
-      return { error: 'Login failed' };
-    } catch (err: any) {
-      console.error('signIn error', err);
-      return { error: err?.message || 'Network error' };
-    }
+  const setProfile = (p: Profile | null) => {
+    setProfileState(p);
   };
 
   const signOut = async () => {
     try {
       await supabase.auth.signOut();
-    } catch (e) {
-      console.warn('supabase signOut', e);
+      setProfileState(null);
+    } catch (err) {
+      console.warn('Sign out error', err);
     }
-    setUser(null);
-    setProfile(null);
-    await storage.removeItem(SESSION_KEY);
   };
 
+  // restore session & profile on start
+  useEffect(() => {
+    let mounted = true;
+
+    const restore = async () => {
+      try {
+        const sessionResp = await supabase.auth.getSession();
+        const session = sessionResp?.data?.session ?? null;
+
+        if (session?.user?.id) {
+          // try to read profile row (public client)
+          const { data, error } = await supabase
+            .from('user_profile')
+            .select('*')
+            .eq('id', session.user.id)
+            .maybeSingle();
+
+          if (mounted) {
+            if (error) {
+              console.warn('Profile fetch error', error);
+              setProfileState(null);
+            } else {
+              setProfileState(data ?? null);
+            }
+          }
+        } else {
+          if (mounted) setProfileState(null);
+        }
+      } catch (err) {
+        console.warn('restore session error', err);
+        if (mounted) setProfileState(null);
+      } finally {
+        // <<< CRITICAL: always stop loading so UI isn't stuck
+        if (mounted) setLoading(false);
+      }
+    };
+
+    restore();
+
+    // subscribe to auth changes to keep profile in sync
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user?.id) {
+        try {
+          const { data } = await supabase
+            .from('user_profile')
+            .select('*')
+            .eq('id', session.user.id)
+            .maybeSingle();
+          setProfileState(data ?? null);
+        } catch (err) {
+          console.warn('auth change profile read error', err);
+          setProfileState(null);
+        }
+      } else {
+        setProfileState(null);
+      }
+      setLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      sub?.subscription?.unsubscribe?.();
+    };
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, profile, loading, setProfile, signInWithPassword, signOut, reloadProfile }}>
+    <AuthContext.Provider value={{ profile, loading, setProfile, signOut }}>
       {children}
     </AuthContext.Provider>
   );
 }
-
-export const useAuth = () => {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
-  return ctx;
-};

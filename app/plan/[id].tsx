@@ -1,5 +1,5 @@
-// app/plan/[id].tsx
-import React, { useEffect, useState, useRef } from 'react';
+// app/plan/[id].tsx  (UPDATED)
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -12,7 +12,7 @@ import {
   Platform,
 } from 'react-native';
 import {
-  TrendingUp, Calendar, DollarSign, Gift, ArrowLeft, Star, Shield, Clock, User, Server, HelpCircle, Database
+  TrendingUp, Calendar, DollarSign, Gift, ArrowLeft, User, Server
 } from 'lucide-react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '@/lib/supabase';
@@ -30,7 +30,7 @@ interface Plan {
   wastage?: number;
 }
 
-const SERVER_URL = 'http://localhost:3001';
+const API_BASE = 'https://xiadot.com/asjewellers';
 
 const loadRazorpayScript = (): Promise<boolean> => {
   return new Promise((resolve) => {
@@ -65,6 +65,10 @@ export default function PlanDetailsPage() {
   const [razorpayReady, setRazorpayReady] = useState(false);
   const [serverStatus, setServerStatus] = useState<string>('Unknown');
 
+  // keep last created provisional payment + order (so we can resume/reopen)
+  const [pendingPaymentId, setPendingPaymentId] = useState<number | null>(null);
+  const [pendingOrder, setPendingOrder] = useState<any | null>(null);
+
   useEffect(() => {
     if (!planId) return;
     loadPlanDetails(planId);
@@ -87,7 +91,7 @@ export default function PlanDetailsPage() {
   const checkServerStatus = async () => {
     try {
       setServerStatus('Checking...');
-      const resp = await fetch(`${SERVER_URL}/health`);
+      const resp = await fetch(`${API_BASE}/health`);
       if (resp.ok) setServerStatus('✅ Running');
       else setServerStatus(`❌ HTTP ${resp.status}`);
     } catch (e: any) {
@@ -131,7 +135,6 @@ export default function PlanDetailsPage() {
     } finally { setLoading(false); }
   };
 
-  // small fetch-with-timeout helper
   const timeoutFetch = async (url: string, init: RequestInit = {}, ms = 15000) => {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), ms);
@@ -145,14 +148,96 @@ export default function PlanDetailsPage() {
     }
   };
 
-  // NEW approach:
-  // 1) ask server to create subscription row (server inserts with service_role key) and create razorpay order
-  // 2) server returns subscription_id + order info
-  // 3) client opens Razorpay, on success calls server /verify-payment
+  // helper to open Razorpay on web using the remembered order
+  const openRazorpayWithOrder = (order: any, paymentId: number) => {
+    if (Platform.OS !== 'web') {
+      Alert.alert('Not supported', 'Native payment flow should be implemented separately.');
+      return;
+    }
+    if (!(window as any).Razorpay) {
+      Alert.alert('Payment error', 'Razorpay script not loaded.');
+      return;
+    }
+    const userData = {
+      name: userSession?.user?.user_metadata?.full_name || userSession?.user?.user_metadata?.name || userSession?.user?.email?.split('@')[0] || 'Customer',
+      email: userSession?.user?.email || 'customer@example.com',
+      contact: userSession?.user?.user_metadata?.phone || '9999999999'
+    };
+
+    const options = {
+      key: order.key_id,
+      amount: String(order.amount),
+      currency: order.currency || 'INR',
+      order_id: order.order_id,
+      name: 'AS Jewellers',
+      description: `Subscription ${plan?.scheme_name ?? ''}`,
+      prefill: { name: userData.name, email: userData.email, contact: userData.contact },
+      theme: { color: '#F6C24A' },
+      handler: async (response: any) => {
+        try {
+          // verify payment with server using the paymentId (provisional)
+          const verifyResp = await timeoutFetch(`${API_BASE}/verify-payment`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              payment_id: paymentId,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_signature: response.razorpay_signature
+            })
+          }, 20000);
+
+          if (!verifyResp.ok) {
+            const t = await verifyResp.text().catch(() => '');
+            console.error('verify failed', verifyResp.status, t);
+            Alert.alert('Verification failed', 'Server could not verify payment.');
+            return;
+          }
+
+          const vjson = await verifyResp.json();
+          if (vjson.success) {
+            setPendingPaymentId(null);
+            setPendingOrder(null);
+            Alert.alert('Success', 'Subscription activated', [{ text: 'View Subscriptions', onPress: () => router.push('/active-plans') }, { text: 'OK' }]);
+          } else {
+            Alert.alert('Verification failed', vjson.message || 'Unknown server error');
+          }
+        } catch (e) {
+          console.error('verify exception', e);
+          Alert.alert('Verification error', 'An error occurred while verifying payment.');
+        }
+      },
+      modal: {
+        ondismiss: () => {
+          // when user dismisses, leave the provisional payment row in DB but offer retry
+          console.log('Payment modal dismissed (order)', order);
+          // show retry prompt
+          Alert.alert(
+            'Payment not completed',
+            'You dismissed the payment window. Do you want to retry?',
+            [
+              { text: 'Retry', onPress: () => openRazorpayWithOrder(order, paymentId) },
+              { text: 'Cancel', style: 'cancel' }
+            ]
+          );
+        }
+      }
+    };
+
+    try {
+      const rzp = new (window as any).Razorpay(options);
+      rzp.open();
+    } catch (e) {
+      console.error('Razorpay open error', e);
+      Alert.alert('Payment error', 'Failed to open payment gateway.');
+    }
+  };
+
+  // NEW: create provisional payment + razorpay order then open checkout
   const handleSubscribe = async () => {
     if (!plan) { Alert.alert('Error', 'Plan not loaded'); return; }
     if (!userSession) {
-      Alert.alert('Login required', 'Please login to subscribe.', [{ text: 'Login', onPress: () => router.push('/auth') }, { text: 'Cancel', style: 'cancel' }]);
+      Alert.alert('Login required', 'Please login to subscribe.', [{ text: 'Login', onPress: () => router.push('/auth/login') }, { text: 'Cancel', style: 'cancel' }]);
       return;
     }
     if (Platform.OS === 'web' && !razorpayReady) { Alert.alert('Error', 'Payment gateway not ready'); return; }
@@ -163,14 +248,12 @@ export default function PlanDetailsPage() {
 
     setActionLoading(true);
     try {
-      console.log('Requesting server to create subscription + order...');
-      // prepare dates
+      // prepare date range
       const startDate = new Date();
       const endDate = new Date();
       endDate.setMonth(endDate.getMonth() + (Number(plan.total_months) || 1));
 
-      // call server to create subscription row and razorpay order
-      const createResp = await timeoutFetch(`${SERVER_URL}/create-subscription`, {
+      const createResp = await timeoutFetch(`${API_BASE}/create-subscription`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -178,98 +261,33 @@ export default function PlanDetailsPage() {
           plan_id: Number(plan.id),
           start_date: startDate.toISOString().split('T')[0],
           end_date: endDate.toISOString().split('T')[0],
-          // optionally pass monthly amount etc.
         }),
       }, 20000);
 
       if (!createResp.ok) {
         const txt = await createResp.text().catch(() => '');
         console.error('create-subscription failed', createResp.status, txt);
-        throw new Error(`Server create-subscription failed: ${createResp.status} ${txt}`);
+        throw new Error(`Server create-subscription failed: ${createResp.status}`);
       }
 
       const createJson = await createResp.json();
-      console.log('create-subscription response:', createJson);
+      if (!createJson.success) throw new Error(createJson.message || 'Failed to create payment/order');
 
-      if (!createJson.success) {
-        throw new Error(createJson.message || 'Server failed to create subscription');
-      }
-
-      const subscriptionId = createJson.subscription_id;
+      const paymentId = createJson.payment_id; // provisional payment id (server)
       const order = createJson.order;
-      if (!subscriptionId || !order || !order.order_id || !order.key_id) {
-        throw new Error('Server returned invalid subscription/order data');
-      }
+      if (!paymentId || !order?.order_id) throw new Error('Invalid server response');
 
-      // open Razorpay on web
+      // remember order+payment for retry/resume
+      setPendingPaymentId(paymentId);
+      setPendingOrder(order);
+
+      // open Razorpay for web
       if (Platform.OS === 'web') {
-        const userData = {
-          name: userSession.user.user_metadata?.full_name || userSession.user.user_metadata?.name || userSession.user.email?.split('@')[0] || 'Customer',
-          email: userSession.user.email || 'customer@example.com',
-          contact: userSession.user.user_metadata?.phone || '9999999999'
-        };
-
-        const paymentResult = await new Promise<{ success: boolean; message?: string }>(resolve => {
-          try {
-            const options = {
-              key: order.key_id,
-              amount: String(order.amount),
-              currency: order.currency || 'INR',
-              order_id: order.order_id,
-              name: 'AS Jewellers',
-              description: `Subscription ${plan.scheme_name}`,
-              prefill: { name: userData.name, email: userData.email, contact: userData.contact },
-              theme: { color: '#F6C24A' },
-              handler: async (response: any) => {
-                console.log('Razorpay handler response:', response);
-                try {
-                  // call server verify endpoint
-                  const verifyResp = await timeoutFetch(`${SERVER_URL}/verify-payment`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      razorpay_payment_id: response.razorpay_payment_id,
-                      razorpay_order_id: response.razorpay_order_id,
-                      razorpay_signature: response.razorpay_signature,
-                      subscription_id: subscriptionId,
-                    })
-                  }, 20000);
-
-                  if (!verifyResp.ok) {
-                    const t = await verifyResp.text().catch(() => '');
-                    console.error('verify failed', verifyResp.status, t);
-                    resolve({ success: false, message: 'Payment verification failed (server)' });
-                    return;
-                  }
-
-                  const vjson = await verifyResp.json();
-                  console.log('verify response', vjson);
-                  if (vjson.success) resolve({ success: true });
-                  else resolve({ success: false, message: vjson.message || 'Verification failed' });
-                } catch (e) {
-                  console.error('verify exception', e);
-                  resolve({ success: false, message: 'Verification exception' });
-                }
-              },
-              modal: { ondismiss: () => { console.log('Payment modal dismissed'); resolve({ success: false, message: 'Payment cancelled' }); } }
-            };
-
-            const rzp = new (window as any).Razorpay(options);
-            rzp.open();
-          } catch (e) {
-            console.error('Razorpay init error', e);
-            resolve({ success: false, message: 'Payment init error' });
-          }
-        });
-
-        if (paymentResult.success) {
-          Alert.alert('Success', 'Subscription activated', [{ text: 'View Subscriptions', onPress: () => router.push('/subscriptions') }, { text: 'OK' }]);
-        } else {
-          throw new Error(paymentResult.message || 'Payment failed');
-        }
+        openRazorpayWithOrder(order, paymentId);
       } else {
-        // For native platforms: implement native SDK flow (not covered here)
-        throw new Error('Native payment flow not implemented (web only supported in this file)');
+        // Native flow: instruct developer to implement native SDK and then call /verify-payment with payment_id
+        Alert.alert('Native not implemented', 'Native Razorpay flow not implemented in this screen. Implement native SDK and POST /verify-payment with payment_id.');
+        console.warn('Native payment flow not implemented - paymentId:', paymentId, 'order:', order);
       }
     } catch (err: any) {
       console.error('Subscription error', err);
@@ -279,14 +297,14 @@ export default function PlanDetailsPage() {
     }
   };
 
-  // Short test helper (calls server health)
-  const testPayment = async () => {
-    if (Platform.OS !== 'web') return;
-    try {
-      await loadRazorpayScript();
-      const resp = await fetch(`${SERVER_URL}/health`);
-      Alert.alert('Server', resp.ok ? 'Running' : `Status ${resp.status}`);
-    } catch (e) { Alert.alert('Server Error', String(e)); }
+  // If a pending order exists, offer a quick retry button in UI
+  const handleRetryPending = () => {
+    if (!pendingOrder || !pendingPaymentId) {
+      Alert.alert('No pending payment', 'No provisional payment to resume.');
+      return;
+    }
+    if (Platform.OS === 'web') openRazorpayWithOrder(pendingOrder, pendingPaymentId);
+    else Alert.alert('Native not supported', 'Native resume flow not implemented.');
   };
 
   if (loading) {
@@ -337,19 +355,9 @@ export default function PlanDetailsPage() {
             <Text style={styles.statusText}>Server: {serverStatus}</Text>
           </View>
 
-          <Text style={styles.serverUrl}>URL: {SERVER_URL}</Text>
-
-          <View style={styles.debugButtons}>
-            <TouchableOpacity style={[styles.debugButton, styles.testButton]} onPress={testPayment}>
-              <Text style={styles.debugButtonText}>Test Payment</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.debugButton, styles.serverButton]} onPress={checkServerStatus}>
-              <Text style={styles.debugButtonText}>Check Server</Text>
-            </TouchableOpacity>
-          </View>
+          <Text style={styles.serverUrl}>URL: {API_BASE}</Text>
         </View>
 
-        {/* Plan Card */}
         <View style={styles.planCard}>
           <View style={styles.planHeader}>
             <TrendingUp size={32} color="#FFD700" />
@@ -386,7 +394,6 @@ export default function PlanDetailsPage() {
           </View>
         </View>
 
-        {/* Summary */}
         <View style={styles.calculationCard}>
           <Text style={styles.sectionTitle}>Investment Summary</Text>
           <View style={styles.calcRow}><Text style={styles.calcLabel}>Monthly Payment</Text><Text style={styles.calcValue}>₹{plan.monthly_due}</Text></View>
@@ -394,6 +401,12 @@ export default function PlanDetailsPage() {
           <View style={styles.calcRow}><Text style={styles.calcLabel}>Total Investment</Text><Text style={styles.calcValue}>₹{totalToPay.toFixed(2)}</Text></View>
           <View style={[styles.calcRow, styles.totalRow]}><Text style={styles.totalLabel}>Total Gold with Bonus</Text><Text style={styles.totalValue}>{(parseFloat(totalGold)/1000 + parseFloat(bonusGoldGrams||'0')).toFixed(3)}g</Text></View>
         </View>
+
+        {pendingPaymentId && (
+          <TouchableOpacity style={styles.retryBtn} onPress={handleRetryPending}>
+            <Text style={styles.retryBtnText}>Resume pending payment</Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity
           style={[styles.subscribeButton, (!userSession || actionLoading || !serverStatus.includes('✅')) && styles.subscribeButtonDisabled]}
@@ -424,10 +437,6 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   statusText: { fontSize: 14, color: '#ccc', marginLeft: 8 },
   serverUrl: { fontSize: 10, color: '#888', fontFamily: 'monospace', marginBottom: 8, marginLeft: 22 },
-  debugButtons: { flexDirection: 'row', gap: 8, marginTop: 12 },
-  debugButton: { flex: 1, padding: 10, borderRadius: 6, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
-  testButton: { backgroundColor: '#4CAF50' },
-  serverButton: { backgroundColor: '#2196F3' },
   planCard: { backgroundColor: '#2a2a2a', margin: 16, padding: 20, borderRadius: 16, borderWidth: 1, borderColor: '#333' },
   planHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   planName: { fontSize: 24, fontWeight: 'bold', color: '#FFD700', marginLeft: 12 },
@@ -447,6 +456,18 @@ const styles = StyleSheet.create({
   totalRow: { borderBottomWidth: 0, marginTop: 8, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#333' },
   totalLabel: { fontSize: 16, color: '#fff', fontWeight: 'bold' },
   totalValue: { fontSize: 16, color: '#FFD700', fontWeight: 'bold' },
+
+  retryBtn: {
+    marginHorizontal: 16,
+    padding: 12,
+    backgroundColor: '#2b2b2b',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#333',
+    alignItems: 'center',
+  },
+  retryBtnText: { color: '#FFD700', fontWeight: '800' },
+
   subscribeButton: { backgroundColor: '#FFD700', margin: 16, padding: 18, borderRadius: 12, alignItems: 'center' },
   subscribeButtonDisabled: { backgroundColor: '#666' },
   subscribeButtonText: { color: '#1a1a1a', fontSize: 18, fontWeight: 'bold' },

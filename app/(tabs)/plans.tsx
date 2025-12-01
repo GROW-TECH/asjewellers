@@ -48,7 +48,7 @@ export default function Plans() {
       console.error('Error fetching plans:', error);
       return;
     }
-
+    console.log('Fetched plans:', data);
     if (data) setPlans(data);
   };
 

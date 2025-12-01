@@ -2,19 +2,35 @@ import { useEffect, useState } from "react";
 import { View, Text, TextInput, TouchableOpacity, StyleSheet } from "react-native";
 import { router } from "expo-router";
 import { supabase } from "@/lib/supabase"; // Adjust path if needed
+import { Session } from "@supabase/supabase-js";
 
 export default function Login() {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [session, setSession] = useState<Session | null>(null);
 
 useEffect(() => {
   (async () => {
     const { data } = await supabase.auth.getSession();
-    console.log("Session check:", data);
+    console.log("Session checks:", data);
+    if(data?.session?.user){    
+        setSession(data.session); 
+      
+      router.replace("/(tabs)");
+    }
   })();
+
+
+
+
+
 }, []);
+
+// useEffect(() => {
+// console.log(session);
+// });
 
   
   const handleLogin = async () => {
