@@ -1,3 +1,4 @@
+// auth/register.tsx
 import React, { useState } from 'react';
 import {
   View,
@@ -9,16 +10,15 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-
-// Make sure you have a supabase client exported from your project, e.g.:
-// export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 import { supabase } from '@/lib/supabase';
+
+const API_BASE = 'http://localhost:3001'; // change to production URL when ready
 
 type Props = {
   onRegistered?: (id: string) => void;
 };
 
-export default function register({ onRegistered }: Props) {
+export default function Register({ onRegistered }: Props) {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -31,7 +31,8 @@ export default function register({ onRegistered }: Props) {
 
   const canSubmit = isPhoneValid(phone) && isPasswordValid(password) && isNameValid(name) && !loading;
 
-  const generateReferralCode = (len = 6) => {
+  // local fallback code generator (kept for offline use)
+  const generateReferralCodeLocal = (len = 7) => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let out = '';
     for (let i = 0; i < len; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -43,45 +44,83 @@ export default function register({ onRegistered }: Props) {
     setLoading(true);
 
     try {
-      // Build an email from phone (e.g. 1234567890@asjewellers.app)
       const sanitizedPhone = phone.trim();
       const emailFromPhone = `${sanitizedPhone}@asjewellers.app`.toLowerCase();
 
-      // 1) Create user in Supabase Auth using email + password.
+      console.log('=== REGISTRATION START ===');
+      console.log('Phone:', sanitizedPhone);
+      console.log('Email:', emailFromPhone);
+      console.log('Referral code provided:', referral);
+
+      // 1) Sign up in Supabase Auth
+      console.log('Step 1: Creating Supabase auth user...');
       const { data: signData, error: signError } = await supabase.auth.signUp({
         email: emailFromPhone,
         password,
       });
-      if (signError) throw signError;
+      if (signError) {
+        console.error('Supabase auth error:', signError);
+        throw signError;
+      }
 
       const user = (signData as any).user ?? (signData as any);
-      // handle older/newer return shapes
       const userId = user?.id;
       if (!userId) throw new Error('No user returned from Supabase auth.');
 
-      // 2) Resolve referral (if provided)
+      console.log('Step 1: Auth user created with ID:', userId);
+
+      // 2) Resolve referral (if provided) -> find referred_by id
       let referredBy: string | null = null;
-      if (referral.trim()) {
+      const referralTrim = (referral || '').trim().toUpperCase();
+      if (referralTrim) {
+        console.log('Step 2: Looking up referral code:', referralTrim);
         const { data: refRow, error: refError } = await supabase
           .from('user_profile')
-          .select('id')
-          .eq('referral_code', referral.trim())
+          .select('id, full_name, phone')
+          .eq('referral_code', referralTrim)
           .limit(1)
           .maybeSingle();
 
-        if (refError) console.warn('referral lookup error', refError);
-        else if (refRow && (refRow as any).id) referredBy = (refRow as any).id;
+        if (refError) {
+          console.warn('Referral lookup error:', refError);
+        } else if (refRow && (refRow as any).id) {
+          referredBy = (refRow as any).id;
+          console.log('Step 2: Found referrer:', refRow.full_name, 'ID:', referredBy);
+        } else {
+          console.warn('Step 2: Referral code not found:', referralTrim);
+          Alert.alert('Note', 'Referral code not found — continuing without a referrer.');
+        }
+      } else {
+        console.log('Step 2: No referral code provided');
       }
 
-      // 3) Generate unique referral code for new user
-      let myReferral = generateReferralCode(7);
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const { data: exists } = await supabase.from('user_profile').select('id').eq('referral_code', myReferral).limit(1);
-        if (!exists || (exists as any).length === 0) break;
-        myReferral = generateReferralCode(7);
+      // 3) Generate referral code for new user
+      console.log('Step 3: Generating referral code...');
+      let myReferral = generateReferralCodeLocal(7);
+      try {
+        console.log('Trying server for referral code generation...');
+        const genResp = await fetch(`${API_BASE}/api/generate-referral-code`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId }),
+        });
+        
+        if (!genResp.ok) {
+          console.warn('Server returned error for referral code:', genResp.status);
+        } else {
+          const genJson = await genResp.json().catch(() => null);
+          console.log('Server response for referral code:', genJson);
+          if (genJson?.success && genJson?.referral_code) {
+            myReferral = genJson.referral_code;
+            console.log('Using server-generated referral code:', myReferral);
+          }
+        }
+      } catch (e) {
+        console.warn('generate-referral-code call failed, using local code:', e);
       }
 
-      // 4) Insert into user_profile with id = auth user id
+      // 4) Insert profile row (id = auth user id)
+      console.log('Step 4: Inserting user profile...');
       const profilePayload = {
         id: userId,
         email: emailFromPhone,
@@ -91,18 +130,95 @@ export default function register({ onRegistered }: Props) {
         referral_code: myReferral,
         referred_by: referredBy,
         metadata: {},
+        created_at: new Date().toISOString(),
       };
 
       const { error: insertError } = await supabase.from('user_profile').insert(profilePayload);
-      if (insertError) throw insertError;
+      if (insertError) {
+        console.error('Failed to insert user_profile:', insertError);
+        throw insertError;
+      }
+      console.log('Step 4: Profile inserted successfully');
+
+      // 5) Build referral tree - CRITICAL STEP WITH PROPER LOGGING
+      console.log('Step 5: Building referral tree...');
+      if (referredBy) {
+        console.log('User has referrer, building tree with referrer ID:', referredBy);
+        
+        try {
+          // Create AbortController for timeout
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+          
+          console.log('Calling build-referral-tree API...');
+          const resp = await fetch(`${API_BASE}/api/build-referral-tree`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ user_id: userId }),
+            signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
+          
+          console.log('build-referral-tree response status:', resp.status);
+          const responseText = await resp.text();
+          console.log('build-referral-tree response text:', responseText);
+          
+          let responseJson = null;
+          try {
+            responseJson = JSON.parse(responseText);
+          } catch (parseError) {
+            console.warn('Failed to parse JSON response:', parseError);
+          }
+          
+          if (!resp.ok) {
+            console.error('build-referral-tree failed with status:', resp.status, 'Response:', responseJson);
+            // Show user-friendly warning
+            Alert.alert(
+              'Note', 
+              'Registration successful, but referral tracking might not work correctly. Please contact support.'
+            );
+          } else {
+            console.log('build-referral-tree successful:', responseJson);
+            if (responseJson?.inserted > 0) {
+              console.log(`Inserted ${responseJson.inserted} referral tree entries`);
+            }
+          }
+        } catch (fetchError: any) {
+          clearTimeout(timeoutId);
+          if (fetchError.name === 'AbortError') {
+            console.error('build-referral-tree request timed out');
+            Alert.alert(
+              'Timeout',
+              'Referral tree setup is taking longer than expected. Your account is created but referral features may need manual setup.'
+            );
+          } else {
+            console.error('Network error calling build-referral-tree:', fetchError);
+            Alert.alert(
+              'Network Error',
+              'Cannot connect to server. Your account is created but referral features may not work until you reconnect.'
+            );
+          }
+        }
+      } else {
+        console.log('Step 5: No referrer, skipping tree building');
+      }
 
       setLoading(false);
-      Alert.alert('Success', 'Registered — check email/phone for verification if required.');
+      console.log('=== REGISTRATION COMPLETE ===');
+      Alert.alert(
+        'Success', 
+        'Account created successfully! Check your email/phone for verification if required.'
+      );
+
       if (onRegistered) onRegistered(userId);
     } catch (err: any) {
       setLoading(false);
-      console.error(err);
-      Alert.alert('Registration error', err.message || JSON.stringify(err));
+      console.error('=== REGISTRATION FAILED ===', err);
+      Alert.alert(
+        'Registration Error', 
+        err.message || 'An error occurred during registration. Please try again.'
+      );
     }
   };
 
@@ -144,7 +260,7 @@ export default function register({ onRegistered }: Props) {
       <TextInput
         placeholder="Referral code (optional)"
         value={referral}
-        onChangeText={setReferral}
+        onChangeText={(txt) => setReferral(txt.toUpperCase())}
         autoCapitalize="characters"
         returnKeyType="done"
         style={styles.input}

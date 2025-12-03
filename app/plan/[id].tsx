@@ -30,7 +30,7 @@ interface Plan {
   wastage?: number;
 }
 
-const API_BASE = 'https://xiadot.com/asjewellers';
+const API_BASE = 'http://localhost:3001'; // replace with your server URL
 
 const loadRazorpayScript = (): Promise<boolean> => {
   return new Promise((resolve) => {
