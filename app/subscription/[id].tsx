@@ -15,7 +15,7 @@ import axios from 'axios';
 import { ArrowLeft } from 'lucide-react-native';
 import Footer from '@/components/Footer';
 
-const API_BASE = 'http://localhost:3001';
+const API_BASE = process.env.EXPO_PUBLIC_SERVER || 'http://localhost:3001';
 
 const loadRazorpayScript = (): Promise<boolean> =>
   new Promise(resolve => {

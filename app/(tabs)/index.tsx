@@ -1,161 +1,282 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Modal } from 'react-native';
-import { Wallet, TrendingUp, Users, IndianRupee, DollarSign, ArrowDownToLine, ChevronDown, Check, Plus } from 'lucide-react-native';
+// screens/HomeScreen.tsx
+import { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  RefreshControl,
+  Modal,
+  ActivityIndicator,
+} from 'react-native';
+import {
+  Wallet,
+  TrendingUp,
+  Users,
+  IndianRupee,
+  DollarSign,
+  ArrowDownToLine,
+  ChevronDown,
+  Check,
+  Plus,
+} from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 
-interface WalletData {
+type WalletData = {
   saving_balance: number;
   referral_balance: number;
   total_balance: number;
   gold_balance_mg: number;
   total_earnings: number;
   total_withdrawn: number;
-}
+} | null;
 
-interface SubscriptionData {
+type SubscriptionRow = {
   id: string;
-  status: string;
-  total_paid: number;
-  plan: {
-    name: string;
-    monthly_amount: number;
-  };
-}
-
-interface ReferralStats {
-  total_referrals: number;
-  total_commission: number;
-}
-
-interface GoldRate {
-  rate_per_gram: number;
-  rate_date: string;
-}
-
-const DUMMY_ACCOUNTS = [
-  {
-    id: '1',
-    account_name: 'Primary Account',
-    account_number: 'INV111111-001',
-    is_primary: true,
-    kyc_verified: true,
-    icon: '👑',
-  },
-  {
-    id: '2',
-    account_name: "Wife's Gold Savings",
-    account_number: 'INV111111-002',
-    is_primary: false,
-    kyc_verified: true,
-    icon: '💼',
-  },
-  {
-    id: '3',
-    account_name: "Children's Education",
-    account_number: 'INV111111-003',
-    is_primary: false,
-    kyc_verified: true,
-    icon: '💼',
-  },
-  {
-    id: '4',
-    account_name: 'Business Investment',
-    account_number: 'INV111111-004',
-    is_primary: false,
-    kyc_verified: false,
-    icon: '💼',
-  },
-];
+  status?: string;
+  total_paid?: number;
+  plan?: { name?: string; monthly_amount?: number } | null;
+  saved_gold_mg?: number | null;
+  saved_gold_g?: number | null;
+  start_date?: string | null;
+  next_date?: string | null;
+  [k: string]: any;
+};
 
 export default function HomeScreen() {
-  
   const { profile } = useAuth();
-  const [wallet, setWallet] = useState<WalletData | null>({ saving_balance: 0, referral_balance: 0, total_balance: 0, gold_balance_mg: 0, total_earnings: 0, total_withdrawn: 0 });
-  const [subscription, setSubscription] = useState<SubscriptionData | null>(null);
-  const [referralStats, setReferralStats] = useState<ReferralStats>({ total_referrals: 0, total_commission: 0 });
-  const [goldRate, setGoldRate] = useState<GoldRate | null>(null);
+
+  const [wallet, setWallet] = useState<WalletData>(null);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionRow[]>([]);
+  const [referralStats, setReferralStats] = useState({ total_referrals: 0, total_commission: 0 });
+  const [goldRate, setGoldRate] = useState<{ rate_per_gram: number; rate_date?: string } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  // NEW: active plan count
+  const [activePlanCount, setActivePlanCount] = useState<number>(0);
+
   const [accountModalVisible, setAccountModalVisible] = useState(false);
+  const DUMMY_ACCOUNTS = [
+    { id: '1', account_name: 'Primary Account', account_number: 'INV111111-001', is_primary: true, kyc_verified: true, icon: '👑' },
+    { id: '2', account_name: "Wife's Gold Savings", account_number: 'INV111111-002', is_primary: false, kyc_verified: true, icon: '💼' },
+    { id: '3', account_name: "Children's Education", account_number: 'INV111111-003', is_primary: false, kyc_verified: true, icon: '💼' },
+    { id: '4', account_name: 'Business Investment', account_number: 'INV111111-004', is_primary: false, kyc_verified: false, icon: '💼' },
+  ];
   const [selectedAccount, setSelectedAccount] = useState(DUMMY_ACCOUNTS[0]);
 
-  // useEffect(() => {
-  //   (async () => {
-  //     const { data } = await supabase.auth.getSession();
-  //     console.log("Session check:", data);
-  //   })();
-  // }, []);
-  
+  // helpers
+  const n = (v?: number | null) => (typeof v === 'number' ? v : 0);
+  const fmt = (v?: number | null, decimals = 2) => n(v).toFixed(decimals);
+
+  // change this if your server runs on a different host / env var
+  const SERVER_BASE = process.env.EXPO_PUBLIC_SERVER || 'http://localhost:3001';
+
+
+  // NEW: fetch active plans count from your server API
+  const fetchActivePlanCount = useCallback(async (userId?: string) => {
+    if (!userId) {
+      setActivePlanCount(0);
+      return;
+    }
+    try {
+      const res = await fetch(`${SERVER_BASE}/api/active-plans/${encodeURIComponent(userId)}`);
+      if (!res.ok) {
+        console.warn('active-plans fetch failed', res.status);
+        setActivePlanCount(0);
+        return;
+      }
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setActivePlanCount(data.length);
+      } else if (typeof data === 'object' && data !== null && Array.isArray((data as any).rows ?? null) ) {
+        // defensive: some responses wrap rows
+        setActivePlanCount(((data as any).rows || []).length);
+      } else {
+        // defensive: if server returns normalized list under other key
+        const count = Array.isArray(data) ? data.length : (data?.length ? data.length : 0);
+        setActivePlanCount(count);
+      }
+    } catch (e) {
+      console.warn('fetchActivePlanCount error', e);
+      setActivePlanCount(0);
+    }
+  }, []);
+
+  const loadData = useCallback(async () => {
+    if (!profile?.id) {
+      setWallet(null);
+      setSubscriptions([]);
+      setReferralStats({ total_referrals: 0, total_commission: 0 });
+      setGoldRate(null);
+      setInitialLoading(false);
+      setActivePlanCount(0);
+      return;
+    }
+
+    try {
+      // 1) wallet
+      try {
+        const { data: walletData, error: walletErr } = await supabase
+          .from('wallets')
+          .select('*')
+          .eq('user_id', profile.id)
+          .maybeSingle();
+
+        console.log(walletData,"wallet data");
+
+        if (walletErr) {
+          console.warn('wallet fetch error', walletErr);
+          setWallet(null);
+        } else if (walletData) {
+          setWallet({
+            saving_balance: Number(walletData.saving_balance ?? 0),
+            referral_balance: Number(walletData.referral_balance ?? 0),
+            total_balance: Number(walletData.total_balance ?? 0),
+            gold_balance_mg: Number(walletData.gold_balance_mg ?? 0),
+            total_earnings: Number(walletData.total_earnings ?? 0),
+            total_withdrawn: Number(walletData.total_withdrawn ?? 0),
+          });
+        } else {
+          setWallet(null);
+        }
+      } catch (e) {
+        console.warn('wallet fetch unexpected', e);
+        setWallet(null);
+      }
+
+      // 2) gold rate early (used for fallback approx)
+      let latestGoldRateValue: number | null = null;
+      try {
+        const { data: goldRateData, error: goldRateError } = await supabase
+          .from('gold_rates')
+          .select('rate_per_gram, rate_date')
+          .order('rate_date', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (goldRateError) {
+          console.warn('gold rate fetch error', goldRateError);
+        }
+        if (goldRateData) {
+          latestGoldRateValue = Number(goldRateData.rate_per_gram ?? 0);
+          setGoldRate({ rate_per_gram: latestGoldRateValue, rate_date: goldRateData.rate_date });
+        } else {
+          setGoldRate(null);
+        }
+      } catch (e) {
+        console.warn('gold rate fetch unexpected', e);
+        setGoldRate(null);
+      }
+
+      // 3) subscriptions - fetch both pending & active for parity with active-plans API
+      try {
+        const { data: subs, error: subsErr } = await supabase
+          .from('user_subscriptions')
+          .select(`
+            id,
+            status,
+            total_paid,
+            plan:plans(name, monthly_amount, scheme_name, monthly_due),
+            saved_gold_mg,
+            saved_gold_g,
+            start_date,
+            next_date,
+            next_payment_date
+          `)
+          .eq('user_id', profile.id)
+          .in('status', ['pending','active']); // <-- changed to include pending
+
+        if (subsErr) {
+          console.warn('subscriptions fetch error', subsErr);
+          setSubscriptions([]);
+        } else if (Array.isArray(subs)) {
+          // normalize & compute saved_gold_mg if missing (fallback)
+          const normalized = subs.map((s: any) => {
+            const planObj = s.plan ?? {};
+            const planName = planObj.name ?? planObj.scheme_name ?? null;
+            const planMonthly = Number(planObj.monthly_amount ?? planObj.monthly_due ?? 0);
+
+            const savedFromMg = s.saved_gold_mg != null ? Number(s.saved_gold_mg) : null;
+            const savedFromG = s.saved_gold_g != null ? Number(s.saved_gold_g) * 1000 : null;
+            let saved_mg = savedFromMg ?? savedFromG ?? null;
+
+            if (saved_mg == null && latestGoldRateValue && s.total_paid != null) {
+              const approxGrams = Number(s.total_paid) / Number(latestGoldRateValue);
+              saved_mg = approxGrams * 1000;
+            }
+
+            return {
+              ...s,
+              total_paid: Number(s.total_paid ?? 0),
+              saved_gold_mg: Number(saved_mg ?? 0),
+              plan: { name: planName, monthly_amount: planMonthly },
+              next_date: s.next_date ?? s.next_payment_date ?? null,
+            } as SubscriptionRow;
+          });
+
+          console.log('fetched subscriptions (raw):', subs);
+          console.log('fetched subscriptions (normalized):', normalized);
+          setSubscriptions(normalized);
+        } else {
+          setSubscriptions([]);
+        }
+      } catch (e) {
+        console.warn('subscriptions fetch unexpected', e);
+        setSubscriptions([]);
+      }
+
+      // NEW: fetch active plan count from server API
+      try {
+        await fetchActivePlanCount(profile.id);
+      } catch (e) {
+        console.warn('active plan count fetch error', e);
+        setActivePlanCount(0);
+      }
+
+      // 4) referrals & commissions
+      try {
+        const { data: referrals } = await supabase
+          .from('referral_tree')
+          .select('*')
+          .eq('user_id', profile.id)
+          .eq('level', 1);
+
+        const { data: commissions } = await supabase
+          .from('referral_commissions')
+          .select('amount')
+          .eq('user_id', profile.id);
+
+        const totalCommission = commissions?.reduce((sum: number, c: any) => sum + Number(c.amount ?? 0), 0) || 0;
+
+        setReferralStats({
+          total_referrals: referrals?.length || 0,
+          total_commission: totalCommission,
+        });
+      } catch (e) {
+        console.warn('referral fetch unexpected', e);
+        setReferralStats({ total_referrals: 0, total_commission: 0 });
+      }
+    } finally {
+      setInitialLoading(false);
+    }
+  }, [profile, fetchActivePlanCount]);
+
+  // load on mount/profile change
   useEffect(() => {
-    if (profile) {
-      loadData();
-    }
-  }, [profile]);
+    setInitialLoading(true);
+    loadData();
+  }, [profile, loadData]);
 
-  const loadData = async () => {
-    if (!profile) return;
-
-    const { data: walletData } = await supabase
-      .from('wallets')
-      .select('*')
-      .eq('user_id', profile.id)
-      .maybeSingle();
-
-    if (walletData) {
-      setWallet(walletData);
-    }
-
-    const { data: subData } = await supabase
-      .from('user_subscriptions')
-      .select(`
-        id,
-        status,
-        total_paid,
-        plan:plans(name, monthly_amount)
-      `)
-      .eq('user_id', profile.id)
-      .eq('status', 'active')
-      .maybeSingle();
-
-    if (subData) {
-      setSubscription(subData as any);
-    }
-
-    const { data: referrals } = await supabase
-      .from('referral_tree')
-      .select('*')
-      .eq('user_id', profile.id)
-      .eq('level', 1);
-
-    const { data: commissions } = await supabase
-      .from('referral_commissions')
-      .select('amount')
-      .eq('user_id', profile.id);
-
-    const totalCommission = commissions?.reduce((sum, c) => sum + parseFloat(c.amount.toString()), 0) || 0;
-
-    setReferralStats({
-      total_referrals: referrals?.length || 0,
-      total_commission: totalCommission,
-    });
-
-    const { data: goldRateData, error: goldRateError } = await supabase
-      .from('gold_rates')
-      .select('rate_per_gram, rate_date')
-      .order('rate_date', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (goldRateError) {
-      console.error('Error fetching gold rate:', goldRateError);
-    }
-
-    if (goldRateData) {
-      console.log('Gold rate data:', goldRateData);
-      setGoldRate(goldRateData);
-    }
-  };
+  // refresh on focus
+  useFocusEffect(
+    useCallback(() => {
+      if (profile?.id) loadData();
+    }, [profile, loadData])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -163,62 +284,56 @@ export default function HomeScreen() {
     setRefreshing(false);
   };
 
+  if (initialLoading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator />
+      </View>
+    );
+  }
+
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FFD700" />
-      }
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FFD700" />}
     >
       <View style={styles.header}>
         <View>
           <Text style={styles.greeting}>Welcome back,</Text>
           <Text style={styles.name}>{profile?.full_name || 'Demo User'}</Text>
         </View>
+
         {goldRate && (
           <View style={styles.goldRateCard}>
             <Text style={styles.goldRateLabel}>Today's Gold Rate</Text>
-            <Text style={styles.goldRateValue}>₹{parseFloat(goldRate.rate_per_gram.toString())}/g</Text>
+            <Text style={styles.goldRateValue}>₹{Number(goldRate.rate_per_gram).toFixed(2)}/g</Text>
           </View>
         )}
       </View>
 
-      <TouchableOpacity
-        style={styles.accountSwitcher}
-        onPress={() => setAccountModalVisible(true)}
-        activeOpacity={0.8}
-      >
-        <View style={styles.accountIconContainer}>
-          <Text style={styles.accountIconText}>{selectedAccount.icon}</Text>
-        </View>
-        <View style={styles.accountInfoContainer}>
-          <Text style={styles.accountLabel}>Current Account</Text>
-          <Text style={styles.accountName} numberOfLines={1}>
-            {selectedAccount.account_name}
-          </Text>
-          <Text style={styles.accountNumber}>{selectedAccount.account_number}</Text>
-        </View>
-        <View style={styles.chevronContainer}>
-          <ChevronDown size={20} color="#FFD700" />
-        </View>
-      </TouchableOpacity>
-
       <View style={styles.walletCard}>
         <View style={styles.walletHeader}>
           <Wallet size={24} color="#FFD700" />
-          <Text style={styles.walletTitle}>Total Balance</Text>
+          <View style={{ marginLeft: 8 }}>
+            <Text style={styles.walletTitle}>Total Balance</Text>
+            {/* NEW: active plan count badge */}
+            <Text style={{ color: '#999', fontSize: 12, marginTop: 2 }}>
+              Active Plans: <Text style={{ color: '#FFD700', fontWeight: '700' }}>{activePlanCount}</Text>
+            </Text>
+          </View>
         </View>
-        <Text style={styles.balanceAmount}>₹{wallet?.total_balance.toFixed(2) || '0.00'}</Text>
+
+        <Text style={styles.balanceAmount}>₹{fmt(wallet?.total_balance)}</Text>
 
         <View style={styles.balanceBreakdown}>
           <View style={styles.balanceItem}>
             <Text style={styles.balanceLabel}>Savings</Text>
-            <Text style={styles.balanceValue}>₹{wallet?.saving_balance.toFixed(2) || '0.00'}</Text>
+            <Text style={styles.balanceValue}>₹{fmt(wallet?.saving_balance)}</Text>
           </View>
           <View style={styles.divider} />
           <View style={styles.balanceItem}>
             <Text style={styles.balanceLabel}>Referral Income</Text>
-            <Text style={styles.balanceValue}>₹{wallet?.referral_balance.toFixed(2) || '0.00'}</Text>
+            <Text style={styles.balanceValue}>₹{fmt(wallet?.referral_balance)}</Text>
           </View>
         </View>
 
@@ -227,100 +342,63 @@ export default function HomeScreen() {
             <View>
               <Text style={styles.goldBalanceLabel}>Gold Holdings</Text>
               <Text style={styles.goldBalanceAmount}>
-                {((wallet?.gold_balance_mg || 0) / 1000).toFixed(3)} grams
+                {((n(wallet?.gold_balance_mg) / 1000)).toFixed(3)} grams
               </Text>
               <Text style={styles.goldBalanceSubtext}>
-                ({wallet?.gold_balance_mg?.toFixed(3) || '0.000'} mg)
+                ({n(wallet?.gold_balance_mg).toFixed(3)} mg)
               </Text>
             </View>
+
             {goldRate && (
               <View style={styles.goldValueCard}>
                 <Text style={styles.goldValueLabel}>Current Value</Text>
                 <Text style={styles.goldValueAmount}>
-                  ₹{(((wallet?.gold_balance_mg || 0) / 1000) * parseFloat(goldRate.rate_per_gram.toString())).toFixed(2)}
+                  ₹{(((n(wallet?.gold_balance_mg) / 1000) * Number(goldRate.rate_per_gram))).toFixed(2)}
                 </Text>
-                <Text style={styles.goldValueSubtext}>@ ₹{parseFloat(goldRate.rate_per_gram.toString())}/g</Text>
+                <Text style={styles.goldValueSubtext}>@ ₹{Number(goldRate.rate_per_gram).toFixed(2)}/g</Text>
               </View>
             )}
           </View>
         </View>
       </View>
 
-      {subscription ? (
-        <View style={styles.card}>
-          <View style={styles.cardHeader}>
-            <TrendingUp size={20} color="#FFD700" />
-            <Text style={styles.cardTitle}>Active Plan</Text>
-          </View>
-          <Text style={styles.planName}>{subscription.plan.name}</Text>
-          <View style={styles.planDetails}>
-            <View style={styles.planDetail}>
-              <Text style={styles.planDetailLabel}>Monthly</Text>
-              <Text style={styles.planDetailValue}>₹{subscription.plan.monthly_amount}</Text>
+      {/* Subscriptions list (show saved gold per plan) */}
+      {subscriptions.length > 0 ? (
+        subscriptions.map((sub) => (
+          <View key={sub.id} style={styles.card}>
+            <View style={styles.cardHeader}>
+              <TrendingUp size={20} color="#FFD700" />
+              <Text style={styles.cardTitle}>{sub.plan?.name ?? 'Plan'}</Text>
             </View>
-            <View style={styles.planDetail}>
-              <Text style={styles.planDetailLabel}>Total Paid</Text>
-              <Text style={styles.planDetailValue}>₹{subscription.total_paid.toFixed(2)}</Text>
+
+            <Text style={styles.planName}>₹{Number(sub.total_paid ?? 0).toFixed(2)}</Text>
+
+            <View style={{ marginTop: 8 }}>
+              <Text style={{ color: '#FFD700', fontWeight: '700' }}>
+                Saved Gold: {(Number(sub.saved_gold_mg ?? 0) / 1000).toFixed(3)} g
+              </Text>
+              <Text style={{ color: '#999', marginTop: 6 }}>
+                Started: {sub.start_date ? String(sub.start_date).split('T')[0] : '—'}
+              </Text>
+              <Text style={{ color: '#999' }}>
+                Next: {sub.next_date ? String(sub.next_date).split('T')[0] : '—'}
+              </Text>
             </View>
           </View>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => router.push('/plans')}
-          >
-            <Text style={styles.actionButtonText}>Make Payment</Text>
-          </TouchableOpacity>
-        </View>
+        ))
       ) : (
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <TrendingUp size={20} color="#FFD700" />
-            <Text style={styles.cardTitle}>No Active Plan</Text>
+            <Text style={styles.cardTitle}>Your Active Plans </Text>
+            <Text style={{ color: '#FFD700', fontWeight: '700' }}>{activePlanCount}</Text>
           </View>
           <Text style={styles.emptyText}>Start your gold saving journey today!</Text>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => router.push('/plans')}
-          >
-            <Text style={styles.actionButtonText}>View Plans</Text>
+          <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/active-plans')}>
+            <Text style={styles.actionButtonText}>View Your Plans</Text>
           </TouchableOpacity>
         </View>
       )}
-
-      <View style={styles.earningsSection}>
-        <Text style={styles.sectionTitle}>My Earnings</Text>
-        <View style={styles.earningsGrid}>
-          <View style={styles.earningBox}>
-            <View style={styles.earningIconContainer}>
-              <DollarSign size={28} color="#10B981" />
-            </View>
-            <Text style={styles.earningLabel}>Total Earnings</Text>
-            <Text style={styles.earningAmount}>₹{(wallet?.total_earnings || 0).toFixed(2)}</Text>
-          </View>
-          <View style={styles.earningBox}>
-            <View style={styles.earningIconContainer}>
-              <TrendingUp size={28} color="#3B82F6" />
-            </View>
-            <Text style={styles.earningLabel}>Available Balance</Text>
-            <Text style={styles.earningAmount}>₹{(wallet?.referral_balance || 0).toFixed(2)}</Text>
-          </View>
-        </View>
-        <View style={styles.earningsGrid}>
-          <View style={styles.earningBox}>
-            <View style={styles.earningIconContainer}>
-              <ArrowDownToLine size={28} color="#F59E0B" />
-            </View>
-            <Text style={styles.earningLabel}>Total Withdrawn</Text>
-            <Text style={styles.earningAmount}>₹{(wallet?.total_withdrawn || 0).toFixed(2)}</Text>
-          </View>
-          <View style={styles.earningBox}>
-            <View style={styles.earningIconContainer}>
-              <Users size={28} color="#8B5CF6" />
-            </View>
-            <Text style={styles.earningLabel}>Referral Income</Text>
-            <Text style={styles.earningAmount}>₹{referralStats.total_commission.toFixed(2)}</Text>
-          </View>
-        </View>
-      </View>
 
       <View style={styles.card}>
         <View style={styles.cardHeader}>
@@ -337,10 +415,7 @@ export default function HomeScreen() {
             <Text style={styles.statLabel}>Total Commission</Text>
           </View>
         </View>
-        <TouchableOpacity
-          style={styles.actionButton}
-          onPress={() => router.push('/referrals')}
-        >
+        <TouchableOpacity style={styles.actionButton} onPress={() => router.push('/referrals')}>
           <Text style={styles.actionButtonText}>View Details</Text>
         </TouchableOpacity>
       </View>
@@ -356,28 +431,13 @@ export default function HomeScreen() {
         <Text style={styles.referralHint}>Share this code to earn commissions</Text>
       </View>
 
-      <Modal
-        visible={accountModalVisible}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setAccountModalVisible(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setAccountModalVisible(false)}
-        >
-          <TouchableOpacity
-            style={styles.modalContent}
-            activeOpacity={1}
-            onPress={(e) => e.stopPropagation()}
-          >
+      {/* Account modal (same as previous) */}
+      <Modal visible={accountModalVisible} transparent animationType="slide" onRequestClose={() => setAccountModalVisible(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setAccountModalVisible(false)}>
+          <TouchableOpacity style={styles.modalContent} activeOpacity={1} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Switch Account</Text>
-              <TouchableOpacity
-                onPress={() => setAccountModalVisible(false)}
-                style={styles.closeButton}
-              >
+              <TouchableOpacity onPress={() => setAccountModalVisible(false)} style={styles.closeButton}>
                 <Text style={styles.closeButtonText}>✕</Text>
               </TouchableOpacity>
             </View>
@@ -421,27 +481,11 @@ export default function HomeScreen() {
                         <View
                           style={[
                             styles.statusBadge,
-                            account.kyc_verified
-                              ? styles.statusBadgeVerified
-                              : styles.statusBadgePending,
+                            account.kyc_verified ? styles.statusBadgeVerified : styles.statusBadgePending,
                           ]}
                         >
-                          <View
-                            style={[
-                              styles.statusDot,
-                              account.kyc_verified
-                                ? styles.statusDotVerified
-                                : styles.statusDotPending,
-                            ]}
-                          />
-                          <Text
-                            style={[
-                              styles.statusBadgeText,
-                              account.kyc_verified
-                                ? styles.statusTextVerified
-                                : styles.statusTextPending,
-                            ]}
-                          >
+                          <View style={[styles.statusDot, account.kyc_verified ? styles.statusDotVerified : styles.statusDotPending]} />
+                          <Text style={[styles.statusBadgeText, account.kyc_verified ? styles.statusTextVerified : styles.statusTextPending]}>
                             {account.kyc_verified ? 'Verified' : 'Pending'}
                           </Text>
                         </View>
@@ -469,9 +513,7 @@ export default function HomeScreen() {
                 </View>
                 <View style={styles.addAccountTextContainer}>
                   <Text style={styles.addAccountText}>Create New Account</Text>
-                  <Text style={styles.addAccountHint}>
-                    {10 - DUMMY_ACCOUNTS.length} slots available
-                  </Text>
+                  <Text style={styles.addAccountHint}>{10 - DUMMY_ACCOUNTS.length} slots available</Text>
                 </View>
               </TouchableOpacity>
             </ScrollView>
@@ -493,6 +535,10 @@ export default function HomeScreen() {
   );
 }
 
+// styles: paste your full styles object (kept same as your original)
+
+
+// styles: paste your full styles object (kept same as your original)
 const styles = StyleSheet.create({
   container: {
     flex: 1,

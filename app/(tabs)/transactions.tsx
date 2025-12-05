@@ -1,5 +1,13 @@
+// screens/TransactionsScreen.tsx
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, RefreshControl } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  RefreshControl,
+  ActivityIndicator,
+} from 'react-native';
 import { Receipt, Calendar, TrendingUp } from 'lucide-react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
@@ -8,16 +16,12 @@ interface Transaction {
   id: string;
   amount: number;
   payment_type: string;
-  month_number: number;
+  month_number?: number | null;
   status: string;
-  gold_rate: number;
-  gold_milligrams: number;
+  gold_rate?: number | null;
+  gold_milligrams?: number | null;
   created_at: string;
-  subscription: {
-    plan: {
-      name: string;
-    };
-  };
+  subscription?: any | null;
 }
 
 interface MonthlySchedule {
@@ -33,65 +37,122 @@ export default function TransactionsScreen() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [schedule, setSchedule] = useState<MonthlySchedule[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (profile) {
       loadData();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile]);
 
   const loadData = async () => {
     if (!profile) return;
+    setLoading(true);
 
-    const { data: transactionsData } = await supabase
-      .from('payments')
-      .select(`
-        *,
-        subscription:user_subscriptions(
-          plan:plans(name)
-        )
-      `)
-      .eq('user_id', profile.id)
-      .order('created_at', { ascending: false });
-
-    if (transactionsData) {
-      setTransactions(transactionsData as any);
-    }
-
-    const { data: subData } = await supabase
-      .from('user_subscriptions')
-      .select(`
-        *,
-        plan:plans(*)
-      `)
-      .eq('user_id', profile.id)
-      .eq('status', 'active')
-      .maybeSingle();
-
-    if (subData) {
-      const { data: paymentsData } = await supabase
+    try {
+      // 1) payments for user (includes subscription relation)
+      const { data: paymentsData, error: paymentsErr } = await supabase
         .from('payments')
-        .select('*')
-        .eq('subscription_id', subData.id)
-        .eq('payment_type', 'monthly_payment')
-        .order('month_number', { ascending: true });
+        .select(`
+          *,
+          subscription:user_subscriptions(
+            plan:plans(name, monthly_amount, payment_months)
+          )
+        `)
+        .eq('user_id', profile.id)
+        .order('created_at', { ascending: false });
 
-      const scheduleData: MonthlySchedule[] = [];
-      const plan = (subData as any).plan;
-
-      for (let i = 1; i <= plan.payment_months; i++) {
-        const payment = paymentsData?.find(p => p.month_number === i);
-
-        scheduleData.push({
-          month: i,
-          amount: plan.monthly_amount,
-          goldMg: payment?.gold_milligrams || 0,
-          status: payment ? 'paid' : 'pending',
-          date: payment?.created_at,
-        });
+      if (paymentsErr) {
+        console.error('Error fetching payments', paymentsErr);
       }
 
-      setSchedule(scheduleData);
+      // 2) withdrawal requests for user
+      const { data: withdrawalsData, error: withdrawalsErr } = await supabase
+        .from('withdrawal_requests')
+        .select('*')
+        .eq('user_id', profile.id)
+        .order('created_at', { ascending: false });
+
+      if (withdrawalsErr) {
+        console.error('Error fetching withdrawals', withdrawalsErr);
+      }
+
+      // 3) format withdrawals to same shape
+      const formattedWithdrawals: Transaction[] = (withdrawalsData || []).map((w: any) => ({
+        id: w.id,
+        amount: Number(w.amount ?? 0),
+        payment_type: 'withdrawal',
+        month_number: null,
+        status: w.status ?? 'pending',
+        gold_rate: null,
+        gold_milligrams: 0,
+        created_at: w.created_at,
+        subscription: null,
+      }));
+
+      // 4) normalize payments (ensure fields exist and numeric types)
+      const normalizedPayments: Transaction[] = (paymentsData || []).map((p: any) => ({
+        id: p.id,
+        amount: Number(p.amount ?? 0),
+        payment_type: p.payment_type ?? 'payment',
+        month_number: p.month_number ?? null,
+        status: p.status ?? 'completed',
+        gold_rate: p.gold_rate ?? null,
+        gold_milligrams: p.gold_milligrams ?? 0,
+        created_at: p.created_at,
+        subscription: p.subscription ?? null,
+      }));
+
+      // 5) combine and sort by date descending
+      const combined = [...normalizedPayments, ...formattedWithdrawals].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+
+      setTransactions(combined);
+
+      // 6) monthly schedule (if user has an active subscription)
+      const { data: activeSub, error: subErr } = await supabase
+        .from('user_subscriptions')
+        .select('*, plan:plans(*)')
+        .eq('user_id', profile.id)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (subErr) {
+        console.error('Error fetching active subscription', subErr);
+        setSchedule([]);
+      } else if (activeSub && activeSub.plan) {
+        // fetch payments for subscription months
+        const { data: paymentsForSub } = await supabase
+          .from('payments')
+          .select('*')
+          .eq('subscription_id', activeSub.id)
+          .eq('payment_type', 'monthly_payment')
+          .order('month_number', { ascending: true });
+
+        const plan = activeSub.plan;
+        const scheduleData: MonthlySchedule[] = [];
+        for (let i = 1; i <= (plan.payment_months ?? 0); i++) {
+          const payment = (paymentsForSub || []).find((p: any) => p.month_number === i);
+          scheduleData.push({
+            month: i,
+            amount: plan.monthly_amount ?? 0,
+            goldMg: Number(payment?.gold_milligrams ?? 0),
+            status: payment ? 'paid' : 'pending',
+            date: payment?.created_at,
+          });
+        }
+        setSchedule(scheduleData);
+      } else {
+        setSchedule([]);
+      }
+    } catch (e) {
+      console.error('loadData error', e);
+      setTransactions([]);
+      setSchedule([]);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -101,12 +162,13 @@ export default function TransactionsScreen() {
     setRefreshing(false);
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return '—';
     const date = new Date(dateString);
     return date.toLocaleDateString('en-IN', {
       day: '2-digit',
       month: 'short',
-      year: 'numeric'
+      year: 'numeric',
     });
   };
 
@@ -115,23 +177,47 @@ export default function TransactionsScreen() {
       case 'monthly_payment':
         return 'Monthly Payment';
       case 'bonus':
-        return 'Bonus Gold';
+        return 'Bonus';
+      case 'withdrawal':
+        return 'Withdrawal Request';
       default:
         return type;
+    }
+  };
+
+  const getStatusBadgeStyle = (status: string) => {
+    switch ((status || '').toLowerCase()) {
+      case 'pending':
+      case 'requested':
+        return [styles.statusBadge, styles.statusPending];
+      case 'failed':
+      case 'rejected':
+        return [styles.statusBadge, styles.statusFailed];
+      case 'completed':
+      case 'processed':
+      case 'paid':
+      case 'success':
+        return [styles.statusBadge, styles.statusCompleted];
+      default:
+        return [styles.statusBadge, styles.statusPending];
     }
   };
 
   return (
     <ScrollView
       style={styles.container}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FFD700" />
-      }
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#FFD700" />}
     >
       <View style={styles.header}>
         <Text style={styles.title}>Transactions</Text>
-        <Text style={styles.subtitle}>Your purchase history</Text>
+        <Text style={styles.subtitle}>Your purchase & withdrawal history</Text>
       </View>
+
+      {loading && (
+        <View style={{ padding: 16 }}>
+          <ActivityIndicator size="small" />
+        </View>
+      )}
 
       {schedule.length > 0 && (
         <View style={styles.scheduleCard}>
@@ -155,9 +241,7 @@ export default function TransactionsScreen() {
                   <>
                     <Text style={styles.scheduleAmount}>₹{item.amount}</Text>
                     <Text style={styles.scheduleGold}>{item.goldMg.toFixed(3)}mg</Text>
-                    {item.date && (
-                      <Text style={styles.scheduleDate}>{formatDate(item.date)}</Text>
-                    )}
+                    {item.date && <Text style={styles.scheduleDate}>{formatDate(item.date)}</Text>}
                   </>
                 ) : (
                   <Text style={styles.schedulePendingText}>Pending</Text>
@@ -185,36 +269,43 @@ export default function TransactionsScreen() {
             <View key={transaction.id} style={styles.transactionCard}>
               <View style={styles.transactionHeader}>
                 <View style={styles.transactionInfo}>
-                  <Text style={styles.transactionType}>
-                    {getPaymentTypeLabel(transaction.payment_type)}
-                  </Text>
-                  <Text style={styles.transactionDate}>
-                    {formatDate(transaction.created_at)}
-                  </Text>
+                  <Text style={styles.transactionType}>{getPaymentTypeLabel(transaction.payment_type)}</Text>
+                  <Text style={styles.transactionDate}>{formatDate(transaction.created_at)}</Text>
                 </View>
+
                 <View style={styles.transactionAmounts}>
-                  <Text style={styles.transactionAmount}>₹{transaction.amount}</Text>
-                  <Text style={styles.transactionGold}>
-                    {transaction.gold_milligrams.toFixed(3)}mg
-                  </Text>
+                  <Text style={styles.transactionAmount}>₹{Number(transaction.amount ?? 0)}</Text>
+                  {/* hide gold for withdrawal rows */}
+                  {transaction.payment_type !== 'withdrawal' && (
+                    <Text style={styles.transactionGold}>
+                      {Number(transaction.gold_milligrams ?? 0).toFixed(3)}mg
+                    </Text>
+                  )}
                 </View>
               </View>
 
               <View style={styles.transactionDetails}>
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Gold Rate</Text>
-                  <Text style={styles.detailValue}>₹{transaction.gold_rate}/g</Text>
-                </View>
-                {transaction.payment_type === 'monthly_payment' && (
+                {/* hide gold-rate for withdrawal */}
+                {transaction.payment_type !== 'withdrawal' && (
+                  <View style={styles.detailRow}>
+                    <Text style={styles.detailLabel}>Gold Rate</Text>
+                    <Text style={styles.detailValue}>
+                      {transaction.gold_rate != null ? `₹${transaction.gold_rate}/g` : '—'}
+                    </Text>
+                  </View>
+                )}
+
+                {transaction.payment_type === 'monthly_payment' && transaction.month_number != null && (
                   <View style={styles.detailRow}>
                     <Text style={styles.detailLabel}>Month</Text>
                     <Text style={styles.detailValue}>{transaction.month_number}</Text>
                   </View>
                 )}
+
                 <View style={styles.detailRow}>
                   <Text style={styles.detailLabel}>Status</Text>
-                  <View style={[styles.statusBadge, styles.statusCompleted]}>
-                    <Text style={styles.statusText}>{transaction.status}</Text>
+                  <View style={getStatusBadgeStyle(transaction.status)}>
+                    <Text style={styles.statusText}>{transaction.status?.toUpperCase()}</Text>
                   </View>
                 </View>
               </View>
@@ -393,6 +484,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginTop: 6,
   },
   detailLabel: {
     fontSize: 13,
@@ -410,6 +502,12 @@ const styles = StyleSheet.create({
   },
   statusCompleted: {
     backgroundColor: '#4ade80',
+  },
+  statusPending: {
+    backgroundColor: '#FFD366',
+  },
+  statusFailed: {
+    backgroundColor: '#f87171',
   },
   statusText: {
     fontSize: 11,

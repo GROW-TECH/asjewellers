@@ -15,7 +15,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import Footer from '@/components/Footer';
 
-const API_BASE = 'http://localhost:3001';
+const API_BASE = process.env.EXPO_PUBLIC_SERVER || 'http://localhost:3001';
 
 export default function ActivePlansScreen() {
   const { profile, loading: authLoading, setProfile } = useAuth();

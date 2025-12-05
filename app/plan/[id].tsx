@@ -16,6 +16,7 @@ import {
 } from 'lucide-react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { supabase } from '@/lib/supabase';
+import Footer from '@/components/Footer';
 
 interface Plan {
   id: number;
@@ -30,7 +31,7 @@ interface Plan {
   wastage?: number;
 }
 
-const API_BASE = 'http://localhost:3001'; // replace with your server URL
+const API_BASE = process.env.EXPO_PUBLIC_SERVER || 'http://localhost:3001';
 
 const loadRazorpayScript = (): Promise<boolean> => {
   return new Promise((resolve) => {
@@ -334,7 +335,8 @@ export default function PlanDetailsPage() {
   const totalGold = ((totalToPay / goldRate) * 1000).toFixed(3);
 
   return (
-    <SafeAreaView style={{ flex: 1 }}>
+    <>
+      <SafeAreaView style={{ flex: 1 }}>
       <ScrollView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -418,6 +420,10 @@ export default function PlanDetailsPage() {
 
       </ScrollView>
     </SafeAreaView>
+
+    <Footer/>
+    </>
+  
   );
 }
 

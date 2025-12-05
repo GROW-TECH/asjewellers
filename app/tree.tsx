@@ -1,17 +1,23 @@
-import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+// screens/TreeScreen.tsx
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Platform } from 'react-native';
 import { ChevronDown, ChevronRight, ArrowLeft, Users } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
+import axios from 'axios';
+import Footer from '@/components/Footer';
 
 interface TreeNode {
   id: string;
   full_name: string;
-  phone_number: string;
+  phone_number: string | null;
   level: number;
   children: TreeNode[];
+  created_at?: string | null;
 }
+
+const API_HOSTS = process.env.EXPO_PUBLIC_SERVER || 'http://localhost:3001';
 
 export default function TreeScreen() {
   const { profile } = useAuth();
@@ -20,134 +26,176 @@ export default function TreeScreen() {
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    if (profile) {
-      loadTreeData();
-    }
-  }, [profile]);
+    if (profile?.id) loadTree();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.id]);
 
-  const loadTreeData = async () => {
-    if (!profile?.id) return;
+  async function fetchServerTree(userId: string) {
+      try {
+        const url = `${API_HOSTS}/api/tree/${userId}`;
+        const res = await axios.get(url, { timeout: 6000 });
+        if (res?.data?.tree && Array.isArray(res.data.tree)) {
+          return res.data.tree as any[];
+        }
+      } catch (e) {
+        // try next host
+      }
+    
+    return null;
+  }
 
-    setLoading(true);
+  async function fetchSupabaseTree(userId: string) {
     try {
-      const { data: referrals, error } = await supabase
+      const { data: rtRows, error: rtErr } = await supabase
         .from('referral_tree')
-        .select(`
-          level,
-          referred_user_id,
-          referred_user:profiles!referral_tree_referred_user_id_fkey(id, full_name, phone_number)
-        `)
-        .eq('user_id', profile.id)
+        .select('level, referred_user_id')
+        .eq('user_id', userId)
         .order('level', { ascending: true });
 
-      if (error) {
-        console.error('Error fetching tree data:', error);
+      if (rtErr || !Array.isArray(rtRows) || rtRows.length === 0) return null;
+
+      const referredIds = Array.from(new Set(rtRows.map((r: any) => r.referred_user_id).filter(Boolean)));
+      if (referredIds.length === 0) return null;
+
+      const { data: profiles, error: pErr } = await supabase
+        .from('user_profile')
+        .select('id, full_name, phone, phone_number, referred_by, created_at')
+        .in('id', referredIds);
+
+      if (pErr || !Array.isArray(profiles)) return null;
+
+      const levelMap = new Map<string, number>();
+      rtRows.forEach((r: any) => levelMap.set(String(r.referred_user_id), Number(r.level || 1)));
+
+      const nodeMap = new Map<string, TreeNode>();
+      profiles.forEach((p: any) => {
+        nodeMap.set(String(p.id), {
+          id: String(p.id),
+          full_name: p.full_name || 'Unnamed User',
+          phone_number: p.phone || p.phone_number || null,
+          level: levelMap.get(String(p.id)) || 1,
+          children: [],
+          created_at: p.created_at || null
+        });
+      });
+
+      const roots: TreeNode[] = [];
+      nodeMap.forEach((node) => {
+        const parentId = (profiles.find((x: any) => String(x.id) === node.id)?.referred_by) ?? null;
+        if (parentId && nodeMap.has(String(parentId))) {
+          nodeMap.get(String(parentId))!.children.push(node);
+        } else if (String(parentId) === String(userId)) {
+          roots.push(node);
+        } else {
+          roots.push(node);
+        }
+      });
+
+      const sortRec = (arr: TreeNode[]) => {
+        arr.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+        arr.forEach(n => sortRec(n.children));
+      };
+      sortRec(roots);
+
+      return roots;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function loadTree() {
+    setLoading(true);
+    setTreeData([]);
+    try {
+      // 1) try server-built tree (preferred)
+      const serverTree = await fetchServerTree(profile!.id);
+      if (serverTree && serverTree.length > 0) {
+        // normalize server shape -> TreeNode
+        const normalized = serverTree.map((n: any) => ({
+          id: String(n.id),
+          full_name: n.full_name || 'Unnamed User',
+          phone_number: n.phone || n.phone_number || null,
+          level: Number(n.level || 1),
+          children: n.children ? normalizeChildren(n.children) : [],
+          created_at: n.created_at ?? null
+        })) as TreeNode[];
+
+        setTreeData(normalized);
+        // expand direct referrals
+        setExpandedNodes(new Set(normalized.map(n => n.id)));
         setLoading(false);
         return;
       }
 
-      const tree = buildTreeStructure(referrals || []);
-      setTreeData(tree);
+      // 2) fallback to supabase direct query-builder
+      const sb = await fetchSupabaseTree(profile!.id);
+      if (sb && sb.length > 0) {
+        setTreeData(sb);
+        setExpandedNodes(new Set(sb.map(n => n.id)));
+        setLoading(false);
+        return;
+      }
 
-      const firstLevelNodes = tree.map(n => n.id);
-      setExpandedNodes(new Set(firstLevelNodes));
-    } catch (error) {
-      console.error('Error loading tree:', error);
+      // nothing found
+      setTreeData([]);
+      setExpandedNodes(new Set());
+    } catch (e) {
+      console.error('loadTree error', e);
+      setTreeData([]);
+      setExpandedNodes(new Set());
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  };
+  }
 
-  const buildTreeStructure = (referrals: any[]): TreeNode[] => {
-    const nodeMap = new Map<string, TreeNode>();
-    const rootNodes: TreeNode[] = [];
-
-    referrals.forEach((ref) => {
-      if (!ref.referred_user) return;
-
-      const node: TreeNode = {
-        id: ref.referred_user.id,
-        full_name: ref.referred_user.full_name || 'Unknown',
-        phone_number: ref.referred_user.phone_number || 'N/A',
-        level: ref.level,
-        children: [],
-      };
-
-      nodeMap.set(node.id, node);
-
-      if (ref.level === 1) {
-        rootNodes.push(node);
-      }
-    });
-
-    referrals.forEach((ref) => {
-      if (ref.level > 1 && ref.referred_user) {
-        const childNode = nodeMap.get(ref.referred_user.id);
-        if (childNode) {
-          let parentFound = false;
-          for (const [parentId, parentNode] of nodeMap.entries()) {
-            if (parentNode.level === ref.level - 1) {
-              if (!parentNode.children.find(c => c.id === childNode.id)) {
-                parentNode.children.push(childNode);
-                parentFound = true;
-                break;
-              }
-            }
-          }
-        }
-      }
-    });
-
-    return rootNodes;
+  const normalizeChildren = (arr: any[]): TreeNode[] => {
+    return (arr || []).map(a => ({
+      id: String(a.id),
+      full_name: a.full_name || 'Unnamed User',
+      phone_number: a.phone || a.phone_number || null,
+      level: Number(a.level || 1),
+      children: a.children ? normalizeChildren(a.children) : [],
+      created_at: a.created_at ?? null
+    }));
   };
 
   const toggleNode = (nodeId: string) => {
-    const newExpanded = new Set(expandedNodes);
-    if (newExpanded.has(nodeId)) {
-      newExpanded.delete(nodeId);
-    } else {
-      newExpanded.add(nodeId);
-    }
-    setExpandedNodes(newExpanded);
+    const newSet = new Set(expandedNodes);
+    if (newSet.has(nodeId)) newSet.delete(nodeId);
+    else newSet.add(nodeId);
+    setExpandedNodes(newSet);
   };
 
   const countChildren = (node: TreeNode): number => {
-    if (node.children.length === 0) return 0;
-    return node.children.length + node.children.reduce((sum, child) => sum + countChildren(child), 0);
+    if (!node.children || node.children.length === 0) return 0;
+    return node.children.length + node.children.reduce((s, c) => s + countChildren(c), 0);
   };
 
-  const renderTreeNode = (node: TreeNode, depth: number = 0) => {
+  const renderTreeNode = (node: TreeNode, depth = 0) => {
     const isExpanded = expandedNodes.has(node.id);
-    const hasChildren = node.children.length > 0;
-    const indentWidth = depth * 20;
+    const hasChildren = node.children && node.children.length > 0;
+    const indent = depth * 20;
     const totalChildren = countChildren(node);
 
     return (
+      
       <View key={node.id}>
         <TouchableOpacity
-          style={[styles.nodeContainer, { marginLeft: indentWidth }]}
+          style={[styles.nodeContainer, { marginLeft: indent }]}
           onPress={() => hasChildren && toggleNode(node.id)}
           disabled={!hasChildren}
         >
           <View style={styles.nodeContent}>
             <View style={styles.nodeLeft}>
-              {hasChildren && (
+              {hasChildren ? (
                 <View style={styles.iconContainer}>
-                  {isExpanded ? (
-                    <ChevronDown size={20} color="#F59E0B" />
-                  ) : (
-                    <ChevronRight size={20} color="#F59E0B" />
-                  )}
+                  {isExpanded ? <ChevronDown size={18} color="#F59E0B" /> : <ChevronRight size={18} color="#F59E0B" />}
                 </View>
-              )}
-              {!hasChildren && <View style={{ width: 20 }} />}
-
-              <View style={styles.levelBadge}>
-                <Text style={styles.levelBadgeText}>L{node.level}</Text>
-              </View>
-
+              ) : <View style={{ width: 20 }} />}
+              <View style={styles.levelBadge}><Text style={styles.levelBadgeText}>L{node.level}</Text></View>
               <View style={styles.nodeInfo}>
                 <Text style={styles.nodeName}>{node.full_name}</Text>
-                <Text style={styles.nodePhone}>{node.phone_number}</Text>
+                <Text style={styles.nodePhone}>{node.phone_number ?? '—'}</Text>
               </View>
             </View>
 
@@ -160,9 +208,9 @@ export default function TreeScreen() {
           </View>
         </TouchableOpacity>
 
-        {isExpanded && node.children.length > 0 && (
+        {isExpanded && hasChildren && (
           <View>
-            {node.children.map((child) => renderTreeNode(child, depth + 1))}
+            {node.children.map(c => renderTreeNode(c, depth + 1))}
           </View>
         )}
       </View>
@@ -170,30 +218,26 @@ export default function TreeScreen() {
   };
 
   const getTotalReferrals = () => {
-    let count = 0;
-    const countNodes = (nodes: TreeNode[]) => {
-      nodes.forEach(node => {
-        count++;
-        if (node.children.length > 0) {
-          countNodes(node.children);
-        }
+    let c = 0;
+    const walk = (arr: TreeNode[]) => {
+      arr.forEach(n => {
+        c++;
+        if (n.children) walk(n.children);
       });
     };
-    countNodes(treeData);
-    return count;
+    walk(treeData);
+    return c;
   };
 
   const getLevelCounts = () => {
     const counts: { [key: number]: number } = {};
-    const countByLevel = (nodes: TreeNode[]) => {
-      nodes.forEach(node => {
-        counts[node.level] = (counts[node.level] || 0) + 1;
-        if (node.children.length > 0) {
-          countByLevel(node.children);
-        }
+    const walk = (arr: TreeNode[]) => {
+      arr.forEach(n => {
+        counts[n.level] = (counts[n.level] || 0) + 1;
+        if (n.children) walk(n.children);
       });
     };
-    countByLevel(treeData);
+    walk(treeData);
     return counts;
   };
 
@@ -218,7 +262,10 @@ export default function TreeScreen() {
   const levelCounts = getLevelCounts();
 
   return (
-    <View style={styles.container}>
+    <>
+    
+    
+        <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <ArrowLeft size={24} color="#FFF" />
@@ -244,25 +291,21 @@ export default function TreeScreen() {
           <View style={styles.emptyState}>
             <Users size={64} color="#475569" />
             <Text style={styles.emptyStateTitle}>No Referrals Yet</Text>
-            <Text style={styles.emptyStateText}>
-              Share your referral code to start building your network
-            </Text>
+            <Text style={styles.emptyStateText}>Share your referral code to start building your network</Text>
           </View>
         ) : (
           <>
             <View style={styles.treeContainer}>
-              <Text style={styles.instructionText}>
-                Tap on any member with a badge to expand their downline
-              </Text>
-              {treeData.map((node) => renderTreeNode(node))}
+              <Text style={styles.instructionText}>Tap on any member with a badge to expand their downline</Text>
+              {treeData.map(n => renderTreeNode(n))}
             </View>
 
             <View style={styles.infoCard}>
               <Text style={styles.infoTitle}>Tree Structure Summary</Text>
-              {Object.entries(levelCounts).map(([level, count]) => (
-                <View key={level} style={styles.infoRow}>
-                  <Text style={styles.infoLabel}>Level {level}:</Text>
-                  <Text style={styles.infoValue}>{count} member{count !== 1 ? 's' : ''}</Text>
+              {Object.entries(levelCounts).map(([lv, cnt]) => (
+                <View key={lv} style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Level {lv}:</Text>
+                  <Text style={styles.infoValue}>{cnt} member{cnt !== 1 ? 's' : ''}</Text>
                 </View>
               ))}
               <View style={styles.divider} />
@@ -279,218 +322,56 @@ export default function TreeScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
     </View>
+
+    <Footer/>
+    
+    
+    
+    
+    
+    
+    
+    
+    </>
+
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0F172A',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 60,
-    paddingBottom: 20,
-    backgroundColor: '#1E293B',
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#334155',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFF',
-  },
-  statsBar: {
-    flexDirection: 'row',
-    backgroundColor: '#1E293B',
-    padding: 16,
-    marginHorizontal: 20,
-    marginTop: 20,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  statItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#94A3B8',
-    marginBottom: 4,
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#F59E0B',
-  },
-  statDivider: {
-    width: 1,
-    height: 40,
-    backgroundColor: '#334155',
-  },
-  content: {
-    flex: 1,
-    padding: 20,
-  },
-  treeContainer: {
-    backgroundColor: '#1E293B',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 20,
-  },
-  instructionText: {
-    color: '#94A3B8',
-    fontSize: 14,
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  legendText: {
-    color: '#10B981',
-    fontSize: 12,
-    marginBottom: 20,
-    textAlign: 'center',
-    fontWeight: '600',
-  },
-  nodeContainer: {
-    marginBottom: 8,
-  },
-  nodeContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#334155',
-    padding: 12,
-    borderRadius: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: '#F59E0B',
-  },
-  nodeLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flex: 1,
-  },
-  iconContainer: {
-    width: 20,
-    alignItems: 'center',
-  },
-  levelBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#1E293B',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  levelBadgeText: {
-    color: '#F59E0B',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  nodeInfo: {
-    flex: 1,
-  },
-  nodeName: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  nodePhone: {
-    color: '#94A3B8',
-    fontSize: 12,
-  },
-  childrenBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#1E293B',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  childrenCount: {
-    color: '#3B82F6',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  infoCard: {
-    backgroundColor: '#1E293B',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 20,
-  },
-  infoTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#FFF',
-    marginBottom: 16,
-  },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  infoLabel: {
-    color: '#94A3B8',
-    fontSize: 14,
-  },
-  infoValue: {
-    color: '#FFF',
-    fontSize: 14,
-  },
-  infoLabelBold: {
-    color: '#F59E0B',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  infoValueBold: {
-    color: '#F59E0B',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#334155',
-    marginVertical: 12,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 40,
-  },
-  loadingText: {
-    color: '#94A3B8',
-    fontSize: 16,
-    marginTop: 16,
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 40,
-    marginTop: 60,
-  },
-  emptyStateTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#FFF',
-    marginTop: 20,
-    marginBottom: 8,
-  },
-  emptyStateText: {
-    fontSize: 14,
-    color: '#94A3B8',
-    textAlign: 'center',
-  },
+  container: { flex: 1, backgroundColor: '#0F172A' },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingTop: 60, paddingBottom: 20, backgroundColor: '#1E293B' },
+  backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#334155', justifyContent: 'center', alignItems: 'center' },
+  headerTitle: { fontSize: 20, fontWeight: 'bold', color: '#FFF' },
+  statsBar: { flexDirection: 'row', backgroundColor: '#1E293B', padding: 16, marginHorizontal: 20, marginTop: 20, borderRadius: 12, alignItems: 'center' },
+  statItem: { flex: 1, alignItems: 'center' },
+  statLabel: { fontSize: 12, color: '#94A3B8', marginBottom: 4 },
+  statValue: { fontSize: 24, fontWeight: 'bold', color: '#F59E0B' },
+  statDivider: { width: 1, height: 40, backgroundColor: '#334155' },
+  content: { flex: 1, padding: 20 },
+  treeContainer: { backgroundColor: '#1E293B', borderRadius: 16, padding: 16, marginBottom: 20 },
+  instructionText: { color: '#94A3B8', fontSize: 14, marginBottom: 8, textAlign: 'center' },
+  nodeContainer: { marginBottom: 8 },
+  nodeContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#334155', padding: 12, borderRadius: 12, borderLeftWidth: 3, borderLeftColor: '#F59E0B' },
+  nodeLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+  iconContainer: { width: 20, alignItems: 'center' },
+  levelBadge: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1E293B', justifyContent: 'center', alignItems: 'center' },
+  levelBadgeText: { color: '#F59E0B', fontSize: 12, fontWeight: 'bold' },
+  nodeInfo: { flex: 1 },
+  nodeName: { color: '#FFF', fontSize: 16, fontWeight: '600', marginBottom: 2 },
+  nodePhone: { color: '#94A3B8', fontSize: 12 },
+  childrenBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#1E293B', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
+  childrenCount: { color: '#3B82F6', fontSize: 12, fontWeight: 'bold' },
+  infoCard: { backgroundColor: '#1E293B', borderRadius: 16, padding: 20, marginBottom: 20 },
+  infoTitle: { fontSize: 18, fontWeight: 'bold', color: '#FFF', marginBottom: 16 },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 },
+  infoLabel: { color: '#94A3B8', fontSize: 14 },
+  infoValue: { color: '#FFF', fontSize: 14 },
+  infoLabelBold: { color: '#F59E0B', fontSize: 16, fontWeight: 'bold' },
+  infoValueBold: { color: '#F59E0B', fontSize: 16, fontWeight: 'bold' },
+  divider: { height: 1, backgroundColor: '#334155', marginVertical: 12 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
+  loadingText: { color: '#94A3B8', fontSize: 16, marginTop: 16 },
+  emptyState: { alignItems: 'center', justifyContent: 'center', padding: 40, marginTop: 60 },
+  emptyStateTitle: { fontSize: 20, fontWeight: 'bold', color: '#FFF', marginTop: 20, marginBottom: 8 },
+  emptyStateText: { fontSize: 14, color: '#94A3B8', textAlign: 'center' }
 });

@@ -17,7 +17,7 @@ import { router } from 'expo-router';
 import axios from 'axios';
 import * as Clipboard from 'expo-clipboard';
 
-const API_BASE = 'http://localhost:3001'; // change to production base when needed
+const API_BASE = process.env.EXPO_PUBLIC_SERVER || 'http://localhost:3001';
 
 export default function ReferralsScreen() {
   const { profile, loading: authLoading } = useAuth();
