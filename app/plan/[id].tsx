@@ -474,7 +474,7 @@ const styles = StyleSheet.create({
   },
   retryBtnText: { color: '#FFD700', fontWeight: '800' },
 
-  subscribeButton: { backgroundColor: '#FFD700', margin: 16, padding: 18, borderRadius: 12, alignItems: 'center' },
+  subscribeButton: { backgroundColor: '#FFD700', margin: 16, padding: 18, borderRadius: 12, alignItems: 'center' ,marginBottom: 100},
   subscribeButtonDisabled: { backgroundColor: '#666' },
   subscribeButtonText: { color: '#1a1a1a', fontSize: 18, fontWeight: 'bold' },
   backButtonText: { color: '#FFD700', fontSize: 16 },
