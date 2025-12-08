@@ -2165,6 +2165,133 @@ if (insertErr) {
   }
 });
 
+// Admin approves a withdrawal request: debits wallet & marks request approved (atomic via RPC preferred)
+app.post('/api/admin/approve-withdrawal', async (req, res) => {
+  try {
+    const { request_id, admin_id = null, admin_notes = null } = req.body ?? {};
+    if (!request_id) return res.status(400).json({ success: false, message: 'request_id required' });
+
+    // 1) Try RPC 'withdraw_commission' if you created it (atomic server-side)
+    try {
+      const rpcPayload = {
+        p_request_id: request_id,
+        p_admin_id: admin_id,
+        p_admin_notes: admin_notes ?? ''
+      };
+      // NOTE: adapt parameter names to your actual SQL function signature if different
+      const { data: rpcData, error: rpcErr } = await supabaseAdmin.rpc('withdraw_commission', rpcPayload);
+
+      if (rpcErr) {
+        console.warn('RPC withdraw_commission failed or not found, falling back:', rpcErr.message || rpcErr);
+        throw rpcErr;
+      }
+
+      // Expect rpcData to indicate success; return it
+      return res.json({ success: true, rpc: rpcData });
+    } catch (rpcErr) {
+      // continue to fallback JS implementation
+    }
+
+    // 2) Fallback JS implementation (best-effort, not fully atomic)
+    // Fetch the withdrawal request
+    const { data: reqRow, error: reqErr } = await supabaseAdmin
+      .from('withdrawal_requests')
+      .select('*')
+      .eq('id', request_id)
+      .limit(1)
+      .maybeSingle();
+
+    if (reqErr) {
+      console.error('approve: fetch request error', reqErr);
+      return res.status(500).json({ success: false, message: 'Failed to fetch request' });
+    }
+    if (!reqRow) return res.status(404).json({ success: false, message: 'Request not found' });
+    if (String(reqRow.status).toLowerCase() !== 'requested' && String(reqRow.status).toLowerCase() !== 'pending') {
+      return res.status(400).json({ success: false, message: 'Request not in requested/pending state' });
+    }
+
+    // fetch wallet row (wallets table)
+    const { data: walletRow, error: walletErr } = await supabaseAdmin
+      .from('wallets')
+      .select('*')
+      .eq('user_id', reqRow.user_id)
+      .limit(1)
+      .maybeSingle();
+
+    if (walletErr) {
+      console.error('approve: wallet fetch error', walletErr);
+      return res.status(500).json({ success: false, message: 'Failed to fetch wallet' });
+    }
+    if (!walletRow) {
+      return res.status(400).json({ success: false, message: 'wallet not found for user' });
+    }
+
+    const referralBalance = Number(walletRow.referral_balance ?? 0);
+    if (referralBalance < Number(reqRow.amount || 0)) {
+      return res.status(400).json({ success: false, message: 'Insufficient referral balance' });
+    }
+
+    // compute new wallet fields
+    const newReferral = referralBalance - Number(reqRow.amount || 0);
+    const newTotal = Number(walletRow.total_balance ?? 0) - Number(reqRow.amount || 0);
+    const newTotalWithdrawn = Number(walletRow.total_withdrawn ?? 0) + Number(reqRow.amount || 0);
+
+    // Update wallet and withdrawal_requests
+    // Note: not strictly transactional here (RPC preferred). We'll attempt wallet update first then update request.
+    const { data: updatedWallet, error: upWErr } = await supabaseAdmin
+      .from('wallets')
+      .update({
+        referral_balance: newReferral,
+        total_balance: newTotal,
+        total_withdrawn: newTotalWithdrawn,
+        updated_at: new Date().toISOString()
+      })
+      .eq('user_id', reqRow.user_id)
+      .select()
+      .maybeSingle();
+
+    if (upWErr) {
+      console.error('approve: wallet update error', upWErr);
+      return res.status(500).json({ success: false, message: 'Failed to update wallet' });
+    }
+
+    const { data: updatedReq, error: upReqErr } = await supabaseAdmin
+      .from('withdrawal_requests')
+      .update({
+        status: 'approved',
+        admin_id: admin_id,
+        admin_notes: admin_notes || null,
+        processed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', request_id)
+      .select()
+      .maybeSingle();
+
+    if (upReqErr) {
+      // rollback wallet update (best-effort)
+      console.error('approve: request update error, attempting rollback', upReqErr);
+      try {
+        await supabaseAdmin.from('wallets')
+          .update({
+            referral_balance: walletRow.referral_balance,
+            total_balance: walletRow.total_balance,
+            total_withdrawn: walletRow.total_withdrawn,
+            updated_at: new Date().toISOString()
+          })
+          .eq('user_id', reqRow.user_id);
+      } catch (rbErr) {
+        console.error('approve: rollback failed', rbErr);
+      }
+      return res.status(500).json({ success: false, message: 'Failed to update withdrawal request; wallet rolled back if possible' });
+    }
+
+    return res.json({ success: true, wallet: updatedWallet, request: updatedReq });
+  } catch (err) {
+    console.error('admin approve error', err);
+    return res.status(500).json({ success: false, message: 'server error', details: String(err) });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`Payment server listening on http://localhost:${PORT}`);
