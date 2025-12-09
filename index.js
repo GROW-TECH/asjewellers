@@ -6,6 +6,9 @@ import dotenv from 'dotenv';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
+// ===== PII encryption helpers (paste once near other helpers) =====
+import assert from 'assert';
+
 
 dotenv.config();
 
@@ -399,6 +402,219 @@ function computeCurrentPlanMonthIndex(startIso) {
   const months = (now.getUTCFullYear() - start.getUTCFullYear()) * 12 + (now.getUTCMonth() - start.getUTCMonth()) + 1;
   return months;
 }
+
+
+
+
+
+
+
+
+
+const PII_MASK_SECRET = process.env.PII_MASK_SECRET || null;
+
+// simple validators
+function isAadhaar(s) {
+  return typeof s === 'string' && /^\d{12}$/.test(s.trim());
+}
+function isPan(s) {
+  return typeof s === 'string' && /^[A-Z]{5}[0-9]{4}[A-Z]$/.test((s || '').toUpperCase().trim());
+}
+
+/**
+ * Encrypt text using AES-256-GCM. Returns a compact hex string: iv:authTag:cipherHex
+ * Requires PII_MASK_SECRET to be at least 32 bytes when Buffer.from(..., 'utf8').
+ */
+function encryptPII(plain) {
+  if (!PII_MASK_SECRET) {
+    // no secret configured -> not encrypting (NOT recommended in production)
+    return plain;
+  }
+  try {
+    const key = crypto.createHash('sha256').update(String(PII_MASK_SECRET)).digest(); // 32 bytes
+    const iv = crypto.randomBytes(12); // 96-bit nonce for GCM
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const ciphertext = Buffer.concat([cipher.update(String(plain)), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    // encode as hex: iv:tag:cipher
+    return `${iv.toString('hex')}:${tag.toString('hex')}:${ciphertext.toString('hex')}`;
+  } catch (e) {
+    console.warn('encryptPII failed, storing raw value (not recommended):', e?.message || e);
+    return plain;
+  }
+}
+
+/**
+ * Optionally: mask plain value for showing / logging (not reversible).
+ * Aadhaar -> show last 4 digits; PAN -> show first 3 + last 2 pattern etc.
+ */
+function maskAadhaar(aadhaar) {
+  if (!aadhaar) return null;
+  const s = String(aadhaar).trim();
+  if (!/^\d{12}$/.test(s)) return null;
+  return `XXXX-XXXX-${s.slice(-4)}`;
+}
+function maskPan(pan) {
+  if (!pan) return null;
+  const s = String(pan).trim();
+  if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(s.toUpperCase())) return null;
+  return `${s.slice(0,2)}XXX${s.slice(-2)}`.toUpperCase();
+}
+
+
+// ===== POST /api/register (idempotent profile creation) =====
+// Body:
+// {
+//   user_id, full_name, phone, email (optional), referral_code (optional), referred_by (optional), aadhaar (optional), pan (optional)
+// }
+app.post('/api/register', async (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const {
+      user_id,
+      full_name,
+      phone,
+      email,
+      referral_code,
+      referred_by,
+      aadhaar,
+      pan
+    } = body;
+
+    if (!user_id || !full_name || !phone) {
+      return res.status(400).json({ success: false, message: 'Missing required fields: user_id, full_name, phone' });
+    }
+
+    // Basic normalization
+    const normalizedPhone = String(phone).replace(/[^0-9]/g, '').slice(0, 15);
+    const normalizedEmail = email ? String(email).toLowerCase().trim() : `${normalizedPhone}@asjewellers.app`;
+
+    // Validate PII formats if provided
+    if (aadhaar && !isAadhaar(String(aadhaar))) {
+      return res.status(400).json({ success: false, message: 'Invalid Aadhaar format (should be 12 digits)' });
+    }
+    if (pan && !isPan(String(pan).toUpperCase())) {
+      return res.status(400).json({ success: false, message: 'Invalid PAN format (should match ABCDE1234F)' });
+    }
+
+    // Encrypt Aadhaar/PAN if secret configured; otherwise store raw (warn)
+    let storedAadhaar = null;
+    let storedPan = null;
+    let maskedAadhaar = null;
+    let maskedPan = null;
+
+    if (aadhaar) {
+      storedAadhaar = encryptPII(String(aadhaar).trim());
+      maskedAadhaar = maskAadhaar(String(aadhaar).trim());
+    }
+    if (pan) {
+      storedPan = encryptPII(String(pan).toUpperCase().trim());
+      maskedPan = maskPan(String(pan).toUpperCase().trim());
+    }
+
+    // Build payload for insert/upsert
+    const payload = {
+      id: user_id,
+      full_name: String(full_name).trim(),
+      phone: normalizedPhone,
+      email: normalizedEmail,
+      referral_code: referral_code || null,
+      referred_by: referred_by || null,
+      created_at: new Date().toISOString()
+    };
+
+    // store encrypted values under 'aadhaar'/'pan' columns so your frontend queries remain same.
+    if (storedAadhaar) payload.aadhaar = storedAadhaar;
+    if (storedPan) payload.pan = storedPan;
+
+    // Optionally store masked fields if you want to show them later without decrypting.
+    // This assumes you added masked_aadhaar and masked_pan columns (optional). If you haven't, skip setting these.
+    if (maskedAadhaar) payload.masked_aadhaar = maskedAadhaar;
+    if (maskedPan) payload.masked_pan = maskedPan;
+
+    // Idempotent insert: only create if not exists. We'll attempt insert and if unique violation occurs, return existing.
+    // Check existing profile
+    const { data: existing, error: existingErr } = await supabaseAdmin
+      .from('user_profile')
+      .select('*')
+      .eq('id', user_id)
+      .maybeSingle();
+
+    if (existingErr) {
+      console.warn('register: existing profile lookup error', existingErr);
+      // continue to attempt insert (but inform)
+    }
+    if (existing && Object.keys(existing).length > 0) {
+      // Profile already exists -> return it (do not overwrite)
+      return res.json({ success: true, existed: true, profile: existing });
+    }
+
+    // Insert new profile
+    const { data: inserted, error: insertErr } = await supabaseAdmin
+      .from('user_profile')
+      .insert(payload)
+      .select()
+      .maybeSingle();
+
+    if (insertErr) {
+      console.error('register: insertErr', insertErr);
+
+      // Friendly mapping for common DB constraint errors
+      const msg = (insertErr?.message || '').toLowerCase();
+      if (msg.includes('unique') && msg.includes('referral_code')) {
+        return res.status(400).json({ success: false, message: 'Referral code already in use' });
+      }
+      if (msg.includes('unique') && msg.includes('aadhaar')) {
+        return res.status(400).json({ success: false, message: 'Aadhaar already exists' });
+      }
+      if (msg.includes('unique') && msg.includes('pan')) {
+        return res.status(400).json({ success: false, message: 'PAN already exists' });
+      }
+
+      return res.status(500).json({ success: false, message: 'Failed to insert profile', details: insertErr.message });
+    }
+
+    // create wallet row (best-effort)
+    try {
+      await supabaseAdmin.from('wallets').insert({
+        user_id,
+        total_balance: 0,
+        saving_balance: 0,
+        referral_balance: 0,
+        total_commission: 0,
+        total_withdrawn: 0,
+        gold_balance_mg: 0,
+        created_at: new Date().toISOString()
+      }).select().maybeSingle();
+    } catch (wErr) {
+      console.warn('register: create-wallet best-effort failed', wErr?.message || wErr);
+    }
+
+    // trigger referral tree build async (fire-and-forget)
+    if (payload.referred_by) {
+      // call local endpoint (same server) to build tree; non-blocking
+      fetch(`http://localhost:${PORT}/api/build-referral-tree`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id })
+      }).catch(e => console.warn('register: build-referral-tree trigger failed', e?.message || e));
+    }
+
+    return res.json({ success: true, existed: false, profile: inserted });
+  } catch (err) {
+    console.error('POST /api/register unexpected', err);
+    return res.status(500).json({ success: false, message: 'Server error', details: String(err) });
+  }
+});
+
+
+
+
+
+
+
+
+
 
 /**
  * POST /create-subscription
