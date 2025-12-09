@@ -99,11 +99,11 @@ async function creditWalletForPayment({ user_id, amount = 0, gold_milligrams = 0
     const currReferral = Number(cur?.referral_balance ?? 0);
     const currTotal = Number(cur?.total_balance ?? 0);
     const currGoldMg = Number(cur?.gold_balance_mg ?? 0);
-    const currTotalEarnings = Number(cur?.total_earnings ?? 0);
+    const currTotalEarnings = Number(cur?.total_commission ?? 0);
     const currTotalWithdrawn = Number(cur?.total_withdrawn ?? 0);
 
     // you may want to route different payment types into different balances.
-    // Here we add to saving_balance + total_balance + total_earnings (as you had before).
+    // Here we add to saving_balance + total_balance + total_commission (as you had before).
     const newSaving = currSaving + rupees;
     const newTotal = currTotal + rupees;
     const newGoldMg = currGoldMg + mg;
@@ -115,7 +115,7 @@ async function creditWalletForPayment({ user_id, amount = 0, gold_milligrams = 0
       referral_balance: currReferral,
       total_balance: newTotal,
       gold_balance_mg: newGoldMg,
-      total_earnings: newTotalEarnings,
+      total_commission: newTotalEarnings,
       total_withdrawn: currTotalWithdrawn,
       updated_at: new Date().toISOString()
     };
@@ -176,6 +176,154 @@ async function computeGoldMgFromAmount(amountRupees) {
 
 
 
+// server/index.js (add near other helpers)
+
+async function recordReferralCommissionForPayment({ paymentRow, planRow }) {
+  // defensive checks
+  if (!paymentRow || !paymentRow.user_id || !paymentRow.id) {
+    console.warn('recordReferralCommissionForPayment: missing paymentRow');
+    return;
+  }
+
+  try {
+    // 1) check idempotency: has this payment already recorded commission?
+    const { data: existing = [], error: exErr } = await supabaseAdmin
+      .from('referral_commissions')
+      .select('id')
+      .eq('payment_id', paymentRow.id)
+      .limit(1);
+
+    if (exErr) {
+      console.warn('Could not check existing referral_commissions', exErr);
+    }
+    if (Array.isArray(existing) && existing.length > 0) {
+      // already recorded for this payment
+      return { recorded: false, reason: 'already_recorded' };
+    }
+
+    // 2) find direct referrer (level 1)
+    // prefer referral_tree but fall back to user_profile.referred_by
+    let referrerId = null;
+    const { data: rtRows } = await supabaseAdmin
+      .from('referral_tree')
+      .select('user_id')
+      .eq('referred_user_id', paymentRow.user_id)
+      .eq('level', 1)
+      .limit(1);
+    if (Array.isArray(rtRows) && rtRows.length > 0) {
+      referrerId = rtRows[0].user_id;
+    } else {
+      const { data: prof } = await supabaseAdmin
+        .from('user_profile')
+        .select('referred_by')
+        .eq('id', paymentRow.user_id)
+        .maybeSingle();
+      referrerId = prof?.referred_by ?? null;
+    }
+
+    if (!referrerId) {
+      return { recorded: false, reason: 'no_referrer' };
+    }
+
+    // 3) compute commission amount
+    // If planRow.payment_type === 'one_time' -> use planRow.commission_amount (fixed)
+    // else recurring -> fallback to planRow.commission_amount if you want fixed, 
+    // or derive from referral_levels_config percentages (below I'll use fixed for level1).
+    let commissionAmount = 0;
+
+    if (String(planRow?.payment_type) === 'one_time') {
+      commissionAmount = Number(planRow?.commission_amount ?? 0);
+    } else {
+      // monthly plan: either use plan.commission_amount (fixed) or compute from percent config.
+      // If you keep percentage config per level, fetch it here and compute. For simplicity:
+      commissionAmount = Number(planRow?.commission_amount ?? 0);
+      // If commissionAmount === 0 and you use percentage config, compute like:
+      // const { data: cfg } = await supabaseAdmin.from('referral_levels_config').select('*').eq('level', 1).maybeSingle();
+      // commissionAmount = Math.round((cfg?.percentage || 0) * Number(paymentRow.amount || 0) / 100);
+    }
+
+    if (!commissionAmount || commissionAmount <= 0) {
+      return { recorded: false, reason: 'zero_commission' };
+    }
+
+    // 4) insert referral_commissions row
+    const commRow = {
+      user_id: referrerId,            // the user receiving commission
+      from_user_id: paymentRow.user_id, // the paying user
+      level: 1,
+      percentage: null,               // leave null because using fixed amount
+      amount: commissionAmount,
+      payment_id: paymentRow.id,
+      created_at: new Date().toISOString()
+    };
+
+    const { data: inserted, error: insErr } = await supabaseAdmin
+      .from('referral_commissions')
+      .insert(commRow)
+      .select()
+      .single();
+
+    if (insErr) {
+      console.error('Failed to insert referral_commissions', insErr);
+      return { recorded: false, reason: 'insert_failed', error: insErr };
+    }
+
+    // 5) credit referrer's wallet (referral_balance + total_balance + total_commission)
+    // Attempt RPC if you have it - else fallback to fetch->upsert
+    try {
+      // Try an RPC named 'increment_wallet' but with referral params if available.
+      // If you don't have RPC for referral, fallback to the manual upsert below.
+      // Commented out RPC example:
+      // await supabaseAdmin.rpc('increment_wallet_referral', { p_user_id: referrerId, p_add_referral: commissionAmount });
+
+      // Fallback manual update/upsert:
+      const { data: existingWallet, error: wErr } = await supabaseAdmin
+        .from('wallets')
+        .select('*')
+        .eq('user_id', referrerId)
+        .maybeSingle();
+
+      if (wErr) {
+        console.warn('recordReferral: wallet fetch error', wErr);
+      }
+
+      const currReferral = Number(existingWallet?.referral_balance ?? 0);
+      const currTotal = Number(existingWallet?.total_balance ?? 0);
+      const currEarnings = Number(existingWallet?.total_commission ?? 0);
+
+      const updated = {
+        user_id: referrerId,
+        referral_balance: currReferral + commissionAmount,
+        total_balance: currTotal + commissionAmount,
+        total_commission: currEarnings + commissionAmount,
+        updated_at: new Date().toISOString()
+      };
+
+      if (!existingWallet) {
+        updated.created_at = new Date().toISOString();
+      }
+
+      const { data: upserted, error: upErr } = await supabaseAdmin
+        .from('wallets')
+        .upsert(updated, { onConflict: ['user_id'] })
+        .select()
+        .maybeSingle();
+
+      if (upErr) {
+        console.error('recordReferral: wallet upsert failed', upErr);
+        return { recorded: false, reason: 'wallet_upsert_failed', error: upErr };
+      }
+
+      return { recorded: true, commission: inserted, wallet: upserted };
+    } catch (wex) {
+      console.error('recordReferral: wallet credit failed', wex);
+      return { recorded: false, reason: 'wallet_error', error: wex };
+    }
+  } catch (err) {
+    console.error('recordReferralCommissionForPayment unexpected', err);
+    return { recorded: false, reason: 'unexpected', error: err };
+  }
+}
 
 
 // Health
@@ -435,6 +583,12 @@ app.post('/create-subscription', async (req, res) => {
  * Verifies signature, checks razorpay payment status & amount, then creates user_subscriptions
  * and updates the payments row to status 'completed'.
  */
+/**
+ * POST /verify-payment
+ * Verifies signature, validates payment with Razorpay, marks payment completed,
+ * attaches to existing subscription OR creates subscription, credits wallet,
+ * and records referral commission (idempotent).
+ */
 app.post('/verify-payment', async (req, res) => {
   try {
     const { payment_id, razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body ?? {};
@@ -461,7 +615,7 @@ app.post('/verify-payment', async (req, res) => {
     }
     if (!paymentRow) return res.status(404).json({ success: false, message: 'Payment record not found' });
 
-    // ensure order id matches stored razorpay_order_id (defensive)
+    // defensive check: razorpay_order_id should match stored order (if stored)
     if (paymentRow.razorpay_order_id && paymentRow.razorpay_order_id !== razorpay_order_id) {
       console.warn('Order id mismatch', { expected: paymentRow.razorpay_order_id, got: razorpay_order_id });
       return res.status(400).json({ success: false, message: 'Order id does not match payment record' });
@@ -469,12 +623,12 @@ app.post('/verify-payment', async (req, res) => {
 
     // idempotent: already completed?
     if (paymentRow.status === 'completed') {
-      // Already completed and attached
+      // If already completed and attached to a subscription, return success.
       if (paymentRow.subscription_id) {
         return res.json({ success: true, message: 'Payment already processed', subscription_id: paymentRow.subscription_id });
       }
 
-      // Completed but not attached: try to attach to an existing subscription for user+plan (defensive)
+      // If completed but not attached, try to attach defensively to an existing subscription (user+plan)
       try {
         const todayIso = new Date().toISOString().slice(0, 10);
         const { data: existing, error: existingErr } = await supabaseAdmin
@@ -488,7 +642,6 @@ app.post('/verify-payment', async (req, res) => {
 
         if (existingErr) {
           console.error('Error checking existing subscriptions for completed-but-unattached payment', existingErr);
-          // return success because payment already captured; but warn
           return res.json({ success: true, message: 'Payment already completed', subscription_id: null, warning: 'subscription_lookup_failed' });
         }
 
@@ -560,7 +713,7 @@ app.post('/verify-payment', async (req, res) => {
       return res.status(500).json({ success: false, message: 'Validation failed' });
     }
 
-    // a little helper to accumulate warnings to send back
+    // accumulate warnings to return
     let responseWarnings = [];
 
     if (Array.isArray(existing) && existing.length > 0) {
@@ -580,7 +733,7 @@ app.post('/verify-payment', async (req, res) => {
         return res.status(500).json({ success: false, message: 'Failed to update payment record' });
       }
 
-      // compute gold_milligrams if missing (try to compute using latest gold rate)
+      // compute gold_milligrams if missing
       let goldMg = Number(paymentRow.gold_milligrams ?? 0);
       if (!goldMg) {
         goldMg = await computeGoldMgFromAmount(Number(paymentRow.amount ?? 0));
@@ -599,6 +752,15 @@ app.post('/verify-payment', async (req, res) => {
       } catch (wErr) {
         console.error('Wallet credit failed for monthly payment', wErr);
         responseWarnings.push('wallet_failed');
+      }
+
+      // record referral commission for this monthly payment (idempotent inside the function)
+      try {
+        const { data: planRow } = await supabaseAdmin.from('plans').select('*').eq('id', paymentRow.plan_id).maybeSingle();
+        await recordReferralCommissionForPayment({ paymentRow, planRow });
+      } catch (e) {
+        console.warn('Failed to record referral commission (verify-payment attach)', e);
+        // do not fail overall flow for commission recording issues
       }
 
       return res.json({ success: true, message: 'Payment recorded and attached to existing subscription', subscription_id: existingSubId, warnings: responseWarnings });
@@ -662,6 +824,14 @@ app.post('/verify-payment', async (req, res) => {
             responseWarnings.push('wallet_failed');
           }
 
+          // record referral commission for this payment
+          try {
+            const { data: planRow } = await supabaseAdmin.from('plans').select('*').eq('id', paymentRow.plan_id).maybeSingle();
+            await recordReferralCommissionForPayment({ paymentRow, planRow });
+          } catch (e) {
+            console.warn('Failed to record referral commission (verify-payment attach-fallback)', e);
+          }
+
           return res.json({ success: true, message: 'Payment recorded and attached to existing subscription', subscription_id: existingSubId, warnings: responseWarnings });
         }
       }
@@ -709,12 +879,22 @@ app.post('/verify-payment', async (req, res) => {
       responseWarnings.push('wallet_failed');
     }
 
+    // record referral commission for first-time subscription (one-time commission)
+    try {
+      const { data: planRow } = await supabaseAdmin.from('plans').select('*').eq('id', paymentRow.plan_id).maybeSingle();
+      await recordReferralCommissionForPayment({ paymentRow, planRow });
+    } catch (e) {
+      console.warn('Failed to record referral commission (verify-payment create-sub)', e);
+      // don't fail subscription on commission issues
+    }
+
     return res.json({ success: true, message: 'Payment verified, subscription activated', subscription_id: subscriptionId, warnings: responseWarnings });
   } catch (err) {
     console.error('verify-payment error', err);
     return res.status(500).json({ success: false, message: 'Server error', details: String(err) });
   }
 });
+
 
 
 
@@ -1896,7 +2076,7 @@ app.get('/api/wallet/:userId', async (req, res) => {
     // Build payload
     const payload = {
       balance: account && account.length > 0 ? Number(account[0].wallet_balance || 0) : Number(walletRow?.total_balance || walletRow?.saving_balance || 0),
-      totalEarnings: Number(walletRow?.total_earnings || 0),
+      totalEarnings: Number(walletRow?.total_commission || 0),
       totalWithdrawn: Number(walletRow?.total_withdrawn || 0),
       autoWithdrawEnabled: Boolean(walletRow?.auto_withdraw_enabled),
       autoWithdrawThreshold: Number(walletRow?.auto_withdraw_threshold || 0),
@@ -2131,7 +2311,7 @@ app.post('/api/create-wallet', async (req, res) => {
       total_balance: 0,
       saving_balance: 0,
       referral_balance: 0,
-      total_earnings: 0,
+      total_commission: 0,
       total_withdrawn: 0,
       gold_balance_mg: 0,
       auto_withdraw_enabled: false,
@@ -2290,6 +2470,52 @@ app.post('/api/admin/approve-withdrawal', async (req, res) => {
   } catch (err) {
     console.error('admin approve error', err);
     return res.status(500).json({ success: false, message: 'server error', details: String(err) });
+  }
+});
+
+
+// POST /api/test/trigger-commission
+// Body: { payment_id, use_existing_payment (bool) }
+// Creates/uses a payment and runs recordReferralCommissionForPayment({ paymentRow, planRow })
+
+//  One time Commission Testing ( Pending )
+app.post('/api/test/trigger-commission', async (req, res) => {
+  try {
+    const { payment_id, use_existing_payment } = req.body ?? {};
+    // If payment_id provided and exists, use it
+    let paymentRow = null;
+    if (payment_id) {
+      const { data, error } = await supabaseAdmin.from('payments').select('*').eq('id', payment_id).maybeSingle();
+      if (error) return res.status(500).json({ error: 'db error fetching payment' });
+      paymentRow = data;
+    }
+
+    // Optionally create a fake completed payment for testing
+    if (!paymentRow) {
+      const fake = {
+        user_id: req.body.from_user_id || 456,   // paying user (test)
+        plan_id: req.body.plan_id || 1,         // plan id (test)
+        amount: req.body.amount || 1000,        // rupees
+        payment_type: 'subscription_initial',
+        month_number: 1,
+        status: 'completed',
+        payment_date: new Date().toISOString(),
+        razorpay_order_id: `test_ord_${Date.now()}`
+      };
+      const { data: inserted, error: insErr } = await supabaseAdmin.from('payments').insert(fake).select().single();
+      if (insErr) return res.status(500).json({ error: 'failed to insert fake payment', details: insErr.message });
+      paymentRow = inserted;
+    }
+
+    // load plan row if exists
+    const { data: planRow } = await supabaseAdmin.from('plans').select('*').eq('id', paymentRow.plan_id).maybeSingle();
+
+    // call the existing function
+    const result = await recordReferralCommissionForPayment({ paymentRow, planRow });
+    return res.json({ success: true, result });
+  } catch (e) {
+    console.error('test trigger commission error', e);
+    return res.status(500).json({ error: String(e) });
   }
 });
 
