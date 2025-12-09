@@ -182,7 +182,6 @@ async function computeGoldMgFromAmount(amountRupees) {
 // server/index.js (add near other helpers)
 
 async function recordReferralCommissionForPayment({ paymentRow, planRow }) {
-  // defensive checks
   if (!paymentRow || !paymentRow.user_id || !paymentRow.id) {
     console.warn('recordReferralCommissionForPayment: missing paymentRow');
     return { recorded: false, reason: 'missing_payment' };
@@ -201,17 +200,16 @@ async function recordReferralCommissionForPayment({ paymentRow, planRow }) {
       return { recorded: false, reason: 'already_recorded' };
     }
 
-    // base amount for instant commissions (prefer paymentRow.amount, fallback plan.monthly_due)
     const baseAmount = Number(paymentRow.amount ?? planRow?.monthly_due ?? 0);
     if (!baseAmount || baseAmount <= 0) {
       return { recorded: false, reason: 'zero_base_amount' };
     }
 
-    // helpful date utils
+    // helpers
     const toISODate = (d) => (new Date(d)).toISOString().slice(0, 10);
-    const addMonthsIso = (isoDate, monthsToAdd) => {
+    const computeScheduledDate = (startIso, monthsToAdd) => {
       try {
-        const d = new Date(isoDate + 'T00:00:00Z');
+        const d = new Date(startIso + 'T00:00:00Z');
         d.setUTCMonth(d.getUTCMonth() + monthsToAdd);
         return d.toISOString().slice(0, 10);
       } catch {
@@ -221,19 +219,128 @@ async function recordReferralCommissionForPayment({ paymentRow, planRow }) {
 
     const results = { inserted: [], scheduled: [], skipped: [], errors: [] };
 
-    // --- 1) Instant commissions: up to 10 levels (percentages array in planRow.commission_instant) ---
-    const instantArr = Array.isArray(planRow?.commission_instant) ? planRow.commission_instant.slice(0, 10) : [];
-    while (instantArr.length < 10) instantArr.push(0);
+    // normalize commission_monthly array (always length 10)
+    const normalizePctArr = (arr, len = 10) => {
+      const out = Array.isArray(arr) ? arr.map(v => {
+        if (v === null || v === undefined) return 0;
+        const s = String(v).replace('%', '').replace(',', '').trim();
+        const n = Number(s);
+        return Number.isFinite(n) ? n : 0;
+      }) : [];
+      while (out.length < len) out.push(0);
+      return out.slice(0, len);
+    };
 
-    for (let level = 1; level <= 10; level++) {
-      try {
-        const pct = Number(instantArr[level - 1] ?? 0);
-        if (!pct || pct <= 0) {
-          results.skipped.push({ type: 'instant', level, reason: 'zero_percentage' });
-          continue;
+    const monthlyPctArrFull = normalizePctArr(planRow?.commission_monthly, 10);
+
+    // --- INSTANT COMMISSIONS: only for ONE_TIME plans ---
+    if (String(planRow?.payment_type) === 'one_time') {
+      const instantArr = normalizePctArr(planRow?.commission_instant, 10);
+
+      for (let level = 1; level <= 10; level++) {
+        try {
+          const pct = Number(instantArr[level - 1] ?? 0);
+          if (!pct || pct <= 0) {
+            results.skipped.push({ type: 'instant', level, reason: 'zero_percentage' });
+            continue;
+          }
+
+          // find referrer at this level
+          const { data: rtRow, error: rtErr } = await supabaseAdmin
+            .from('referral_tree')
+            .select('user_id')
+            .eq('referred_user_id', paymentRow.user_id)
+            .eq('level', level)
+            .limit(1)
+            .maybeSingle();
+
+          if (rtErr) {
+            results.errors.push({ type: 'instant', level, step: 'fetch_referrer', error: rtErr });
+            continue;
+          }
+          const referrerId = rtRow?.user_id ?? null;
+          if (!referrerId) {
+            results.skipped.push({ type: 'instant', level, reason: 'no_referrer' });
+            continue;
+          }
+
+          // compute amount (in rupees, rounded)
+          const amount = Math.round((baseAmount * pct) / 100);
+          if (!amount || amount <= 0) {
+            results.skipped.push({ type: 'instant', level, referrerId, reason: 'computed_zero' });
+            continue;
+          }
+
+          const commRow = {
+            user_id: referrerId,
+            from_user_id: paymentRow.user_id,
+            level,
+            percentage: pct,
+            amount,
+            payment_id: paymentRow.id,
+            scheduled: false,
+            status: 'completed',
+            created_at: new Date().toISOString()
+          };
+
+          const { data: inserted, error: insErr } = await supabaseAdmin
+            .from('referral_commissions')
+            .insert(commRow)
+            .select()
+            .single();
+
+          if (insErr) {
+            results.errors.push({ type: 'instant', level, step: 'insert_commission', error: insErr });
+            continue;
+          }
+
+          // credit wallet (best-effort)
+          try {
+            const { data: existingWallet } = await supabaseAdmin
+              .from('wallets').select('*').eq('user_id', referrerId).maybeSingle();
+
+            const currReferral = Number(existingWallet?.referral_balance ?? 0);
+            const currTotal = Number(existingWallet?.total_balance ?? 0);
+            const currEarnings = Number(existingWallet?.total_commission ?? 0);
+
+            const updatedWallet = {
+              user_id: referrerId,
+              referral_balance: currReferral + amount,
+              total_balance: currTotal + amount,
+              total_commission: currEarnings + amount,
+              updated_at: new Date().toISOString()
+            };
+            if (!existingWallet) updatedWallet.created_at = new Date().toISOString();
+
+            const { data: upserted, error: upErr } = await supabaseAdmin
+              .from('wallets').upsert(updatedWallet, { onConflict: ['user_id'] }).select().maybeSingle();
+
+            if (upErr) {
+              results.errors.push({ type: 'instant', level, step: 'wallet_upsert', error: upErr });
+              results.inserted.push({ level, commission: inserted, wallet: null });
+            } else {
+              results.inserted.push({ level, commission: inserted, wallet: upserted });
+            }
+          } catch (we) {
+            results.errors.push({ type: 'instant', level, step: 'wallet_trycatch', error: we });
+            results.inserted.push({ level, commission: inserted, wallet: null });
+          }
+        } catch (outer) {
+          results.errors.push({ type: 'instant', level, step: 'outer', error: outer });
         }
+      } // end instant loop
+    } // end instant only for one_time
 
-        // find referrer at this level
+    // --- SCHEDULE MONTHLY COMMISSIONS for ONE_TIME plans (top 5 for 24 months) ---
+    if (String(planRow?.payment_type) === 'one_time') {
+      const monthlyPctArrTop5 = monthlyPctArrFull.slice(0, 5);
+      const paymentDateIso = (paymentRow.payment_date || new Date().toISOString()).slice(0, 10);
+      const monthsToSchedule = 24;
+
+      for (let level = 1; level <= 5; level++) {
+        const pct = Number(monthlyPctArrTop5[level - 1] ?? 0);
+        if (!pct || pct <= 0) continue;
+
         const { data: rtRow, error: rtErr } = await supabaseAdmin
           .from('referral_tree')
           .select('user_id')
@@ -241,158 +348,62 @@ async function recordReferralCommissionForPayment({ paymentRow, planRow }) {
           .eq('level', level)
           .limit(1)
           .maybeSingle();
-
-        if (rtErr) {
-          results.errors.push({ type: 'instant', level, step: 'fetch_referrer', error: rtErr });
-          continue;
-        }
-        const referrerId = rtRow?.user_id ?? null;
-        if (!referrerId) {
-          results.skipped.push({ type: 'instant', level, reason: 'no_referrer' });
+        if (rtErr || !rtRow?.user_id) {
+          results.skipped.push({ type: 'schedule', level, reason: 'no_referrer_or_error', error: rtErr });
           continue;
         }
 
-        const amount = Math.round((baseAmount * pct) / 100);
-        if (!amount || amount <= 0) {
-          results.skipped.push({ type: 'instant', level, referrerId, reason: 'computed_zero' });
-          continue;
-        }
+        const referrerId = rtRow.user_id;
+        for (let m = 1; m <= monthsToSchedule; m++) {
+          const scheduledDate = computeScheduledDate(paymentDateIso, m - 1);
+          const amount = Math.round((baseAmount * pct) / 100);
+          if (!amount || amount <= 0) continue;
 
-        const commRow = {
-          user_id: referrerId,
-          from_user_id: paymentRow.user_id,
-          level,
-          percentage: pct,
-          amount,
-          payment_id: paymentRow.id,
-          scheduled: false,
-          status: 'completed',
-          created_at: new Date().toISOString()
-        };
+          // idempotency: avoid duplicate scheduled row
+          const { data: dup = [] } = await supabaseAdmin
+            .from('scheduled_commissions')
+            .select('id')
+            .eq('user_id', referrerId)
+            .eq('from_user_id', paymentRow.user_id)
+            .eq('level', level)
+            .eq('scheduled_month', m)
+            .eq('scheduled_for', scheduledDate)
+            .limit(1);
 
-        const { data: inserted, error: insErr } = await supabaseAdmin
-          .from('referral_commissions')
-          .insert(commRow)
-          .select()
-          .single();
+          if (Array.isArray(dup) && dup.length > 0) continue;
 
-        if (insErr) {
-          results.errors.push({ type: 'instant', level, step: 'insert_commission', error: insErr });
-          continue;
-        }
-
-        // credit wallet (best-effort upsert)
-        try {
-          const { data: existingWallet } = await supabaseAdmin
-            .from('wallets').select('*').eq('user_id', referrerId).maybeSingle();
-
-          const currReferral = Number(existingWallet?.referral_balance ?? 0);
-          const currTotal = Number(existingWallet?.total_balance ?? 0);
-          const currEarnings = Number(existingWallet?.total_commission ?? 0);
-
-          const updatedWallet = {
+          const schedRow = {
             user_id: referrerId,
-            referral_balance: currReferral + amount,
-            total_balance: currTotal + amount,
-            total_commission: currEarnings + amount,
-            updated_at: new Date().toISOString()
+            from_user_id: paymentRow.user_id,
+            plan_id: paymentRow.plan_id ?? planRow?.id ?? null,
+            level,
+            percentage: pct,
+            amount,
+            scheduled_month: m,
+            scheduled_for: scheduledDate,
+            status: 'pending',
+            attempts: 0,
+            created_at: new Date().toISOString()
           };
-          if (!existingWallet) updatedWallet.created_at = new Date().toISOString();
 
-          const { data: upserted, error: upErr } = await supabaseAdmin
-            .from('wallets').upsert(updatedWallet, { onConflict: ['user_id'] }).select().maybeSingle();
-
-          if (upErr) {
-            results.errors.push({ type: 'instant', level, step: 'wallet_upsert', error: upErr });
-            results.inserted.push({ level, commission: inserted, wallet: null });
-          } else {
-            results.inserted.push({ level, commission: inserted, wallet: upserted });
+          try {
+            await supabaseAdmin.from('scheduled_commissions').insert(schedRow);
+            results.scheduled.push({ level, month: m, referrerId, scheduled_for: scheduledDate });
+          } catch (scErr) {
+            results.errors.push({ type: 'schedule', level, month: m, error: scErr });
           }
-        } catch (we) {
-          results.errors.push({ type: 'instant', level, step: 'wallet_trycatch', error: we });
-          results.inserted.push({ level, commission: inserted, wallet: null });
         }
-      } catch (outer) {
-        results.errors.push({ type: 'instant', level, step: 'outer', error: outer });
       }
-    }
+    } // end one_time scheduling
 
-    // --- 2) Monthly commissions for one_time plans: schedule 24 months for upper 5 levels ---
-   // inside recordReferralCommissionForPayment, after instant commissions are processed
-// --- schedule monthly commissions into scheduled_commissions (one_time plans) ---
-if (String(planRow?.payment_type) === 'one_time') {
-  const monthlyPctArr = Array.isArray(planRow?.commission_monthly) ? planRow.commission_monthly.slice(0, 5) : [];
-  while (monthlyPctArr.length < 5) monthlyPctArr.push(0);
-
-  const paymentDateIso = (paymentRow.payment_date || new Date().toISOString()).slice(0, 10);
-  const monthsToSchedule = 24;
-
-  for (let level = 1; level <= 5; level++) {
-    const pct = Number(monthlyPctArr[level - 1] ?? 0);
-    if (!pct || pct <= 0) continue;
-
-    // fetch referrer for this level once
-    const { data: rtRow, error: rtErr } = await supabaseAdmin
-      .from('referral_tree')
-      .select('user_id')
-      .eq('referred_user_id', paymentRow.user_id)
-      .eq('level', level)
-      .limit(1)
-      .maybeSingle();
-    if (rtErr || !rtRow?.user_id) continue;
-
-    const referrerId = rtRow.user_id;
-    for (let m = 1; m <= monthsToSchedule; m++) {
-      const scheduledDate = computeEndDateFromMonths(paymentDateIso, m - 1); // helper already in your file
-      const amount = Math.round((Number(paymentRow.amount ?? planRow.monthly_due ?? 0) * pct) / 100);
-      if (!amount || amount <= 0) continue;
-
-      // idempotency: check existence of same scheduled row
-      const { data: dup = [] } = await supabaseAdmin
-        .from('scheduled_commissions')
-        .select('id')
-        .eq('user_id', referrerId)
-        .eq('from_user_id', paymentRow.user_id)
-        .eq('level', level)
-        .eq('scheduled_month', m)
-        .eq('scheduled_for', scheduledDate)
-        .limit(1);
-
-      if (Array.isArray(dup) && dup.length > 0) continue;
-
-      const schedRow = {
-        user_id: referrerId,
-        from_user_id: paymentRow.user_id,
-        plan_id: paymentRow.plan_id ?? planRow?.id ?? null,
-        level,
-        percentage: pct,
-        amount,
-        scheduled_month: m,
-        scheduled_for: scheduledDate,
-        status: 'pending',
-        attempts: 0,
-        created_at: new Date().toISOString()
-      };
-
-      await supabaseAdmin.from('scheduled_commissions').insert(schedRow);
-    }
-  }
-}
-
-    // --- 3) Recurring plans (monthly payment) -> pay up to 10 levels but only for first 11 months ---
+    // --- RECURRING PLANS: immediate monthly commissions (levels 1..10) for months 1..11 ---
     if (String(planRow?.payment_type) !== 'one_time') {
-      // ensure month_number exists
       const monthNumber = Number(paymentRow.month_number ?? 1);
       if (monthNumber <= 0) {
         results.skipped.push({ type: 'recurring', reason: 'invalid_month_number', monthNumber });
       } else if (monthNumber > 11) {
-        // per requirement: only first 11 months pay commission
         results.skipped.push({ type: 'recurring', reason: 'beyond_commission_months', monthNumber });
       } else {
-        // commission_monthly expected length 10 for levels 1..10
-        const monthlyPctArrFull = Array.isArray(planRow?.commission_monthly) ? planRow.commission_monthly.slice(0, 10) : [];
-        while (monthlyPctArrFull.length < 10) monthlyPctArrFull.push(0);
-
         for (let level = 1; level <= 10; level++) {
           try {
             const pct = Number(monthlyPctArrFull[level - 1] ?? 0);
@@ -425,7 +436,6 @@ if (String(planRow?.payment_type) === 'one_time') {
               continue;
             }
 
-            // insert commission immediately and credit wallet
             const commRow = {
               user_id: referrerId,
               from_user_id: paymentRow.user_id,
@@ -485,7 +495,7 @@ if (String(planRow?.payment_type) === 'one_time') {
           } catch (lvlEx) {
             results.errors.push({ type: 'recurring', level, monthNumber, step: 'outer', error: lvlEx });
           }
-        } // end loop levels
+        } // end recurring levels loop
       }
     } // end recurring handling
 
@@ -497,6 +507,22 @@ if (String(planRow?.payment_type) === 'one_time') {
 }
 
 
+
+app.post('/test/commission', async (req, res) => {
+  try {
+    const { paymentRow, planRow } = req.body;
+
+    const result = await recordReferralCommissionForPayment({
+      paymentRow,
+      planRow
+    });
+
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 // Health
