@@ -8,6 +8,9 @@ import crypto from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 // ===== PII encryption helpers (paste once near other helpers) =====
 import assert from 'assert';
+import axios from 'axios';
+import cron from 'node-cron'; // Import the cron library
+
 
 
 dotenv.config();
@@ -40,147 +43,85 @@ app.use(cors({ origin: true, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 
 app.use(bodyParser.json({ limit: '200kb' }));
 
 
+// Function to normalize the percentage array
+function normalizePctArr(arr, len = 10) {
+  const out = Array.isArray(arr) ? arr.map(v => {
+    if (v === null || v === undefined) return 0;
+    const s = String(v).replace('%', '').replace(',', '').trim();
+    const n = Number(s);
+    return Number.isFinite(n) ? n : 0;
+  }) : [];
+  
+  // Ensure the array has the specified length
+  while (out.length < len) out.push(0);
+  
+  return out.slice(0, len);  // Ensure the length doesn't exceed the specified value
+}
 
-// helper for update wallet
 
-// helper: credit wallet using RPC, fallback to upsert if RPC fails
-// Helper: atomic credit wallet via RPC, fallback to fetch->upsert
-/**
- * Credit user's wallet safely and idempotently.
- * If payment_id is provided, the function will:
- *  - check payments.wallet_credited and skip if already true
- *  - set payments.wallet_credited = true after a successful credit
- *
- * @param {Object} opts
- * @param {string|number} opts.user_id
- * @param {number} [opts.amount] rupees to add
- * @param {number} [opts.gold_milligrams] mg to add
- * @param {string|number} [opts.payment_id] optional payment id to mark wallet_credited
- */
-// server/index.js - replace your existing function with this
+// Function to directly update the wallet after commission processing
 async function creditWalletForPayment({ user_id, amount = 0, gold_milligrams = 0 }) {
   if (!user_id) throw new Error('user_id required');
 
   const rupees = Number(amount || 0);
   const mg = Math.round(Number(gold_milligrams || 0));
 
-  // Try RPC (increment_wallet) first (atomic)
   try {
-    const { data, error } = await supabaseAdmin.rpc('increment_wallet', {
-      p_user_id: user_id,
-      p_add_money: rupees,
-      p_add_gold_mg: mg
-    });
-
-    if (error) {
-      // rpc may return an error object even with 200
-      console.warn('increment_wallet rpc returned error', error);
-      throw error;
-    }
-
-    // rpc should return the updated wallet (adjust if your RPC returns different shape)
-    if (data) return data;
-    return null;
-  } catch (rpcErr) {
-    console.warn('RPC increment_wallet failed, falling back to upsert', rpcErr?.message || rpcErr);
-  }
-
-  // Fallback: fetch -> compute -> upsert (non-atomic, best-effort)
-  try {
-    const { data: cur, error: curErr } = await supabaseAdmin
+    // Fetch the current wallet details
+    const { data: currentWallet, error: fetchError } = await supabaseAdmin
       .from('wallets')
       .select('*')
       .eq('user_id', user_id)
       .maybeSingle();
 
-    if (curErr) {
-      console.error('fallback wallet fetch error', curErr);
-      throw curErr;
+    if (fetchError) {
+      console.error('Error fetching wallet data:', fetchError);
+      throw fetchError;
     }
 
-    const currSaving = Number(cur?.saving_balance ?? 0);
-    const currReferral = Number(cur?.referral_balance ?? 0);
-    const currTotal = Number(cur?.total_balance ?? 0);
-    const currGoldMg = Number(cur?.gold_balance_mg ?? 0);
-    const currTotalEarnings = Number(cur?.total_commission ?? 0);
-    const currTotalWithdrawn = Number(cur?.total_withdrawn ?? 0);
+    const currReferral = Number(currentWallet?.referral_balance ?? 0);
+    const currTotal = Number(currentWallet?.total_balance ?? 0);
+    const currGoldMg = Number(currentWallet?.gold_balance_mg ?? 0);
+    const currTotalEarnings = Number(currentWallet?.total_commission ?? 0);
+    const currTotalWithdrawn = Number(currentWallet?.total_withdrawn ?? 0);
 
-    // you may want to route different payment types into different balances.
-    // Here we add to saving_balance + total_balance + total_commission (as you had before).
-    const newSaving = currSaving + rupees;
-    const newTotal = currTotal + rupees;
-    const newGoldMg = currGoldMg + mg;
-    const newTotalEarnings = currTotalEarnings + rupees;
+    // Update the wallet balances
+    const updatedTotalBalance = currTotal + rupees;
+    const updatedGoldMg = currGoldMg + mg;
+    const updatedTotalEarnings = currTotalEarnings + rupees;
 
     const payload = {
       user_id,
-      saving_balance: newSaving,
-      referral_balance: currReferral,
-      total_balance: newTotal,
-      gold_balance_mg: newGoldMg,
-      total_commission: newTotalEarnings,
+      referral_balance: currReferral, // You can choose to update this value too if needed
+      total_balance: updatedTotalBalance,
+      gold_balance_mg: updatedGoldMg,
+      total_commission: updatedTotalEarnings,
       total_withdrawn: currTotalWithdrawn,
-      updated_at: new Date().toISOString()
+      updated_at: new Date().toISOString(),
     };
 
-    // if no row existed, add created_at
-    if (!cur) payload.created_at = new Date().toISOString();
+    if (!currentWallet) payload.created_at = new Date().toISOString();
 
-    // upsert with onConflict user_id
-    const { data: upserted, error: upErr } = await supabaseAdmin
+    // Upsert the wallet record
+    const { data: updatedWallet, error: upsertError } = await supabaseAdmin
       .from('wallets')
       .upsert(payload, { onConflict: ['user_id'] })
       .select()
       .maybeSingle();
 
-    if (upErr) {
-      console.error('fallback wallet upsert failed', upErr);
-      throw upErr;
+    if (upsertError) {
+      console.error('Error updating wallet:', upsertError);
+      throw upsertError;
     }
 
-    return upserted;
+    return updatedWallet;
   } catch (e) {
-    console.error('creditWalletForPayment fallback failed', e);
-    // bubble up so caller can decide; or return null
+    console.error('Error updating wallet:', e);
     throw e;
   }
 }
 
-
-
-// Helper: try compute gold mg from rupees using latest gold_rates entry
-async function computeGoldMgFromAmount(amountRupees) {
-  try {
-    const { data: rateRow, error } = await supabaseAdmin
-      .from('gold_rates')
-      .select('rate_per_gram, rate_date')
-      .order('rate_date', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (error || !rateRow) {
-      console.warn('Could not fetch gold rate, skipping gold mg compute', error);
-      return 0;
-    }
-    const ratePerGram = Number(rateRow.rate_per_gram || 0);
-    if (!ratePerGram || ratePerGram <= 0) return 0;
-
-    // grams = rupees / ratePerGram ; mg = grams * 1000
-    const grams = Number(amountRupees) / ratePerGram;
-    const mg = Math.round(grams * 1000);
-    return mg;
-  } catch (e) {
-    console.warn('computeGoldMgFromAmount error', e);
-    return 0;
-  }
-}
-
-
-
-
-
-// server/index.js (add near other helpers)
-
+// Function to record the referral commission
 async function recordReferralCommissionForPayment({ paymentRow, planRow }) {
   if (!paymentRow || !paymentRow.user_id || !paymentRow.id) {
     console.warn('recordReferralCommissionForPayment: missing paymentRow');
@@ -188,7 +129,6 @@ async function recordReferralCommissionForPayment({ paymentRow, planRow }) {
   }
 
   try {
-    // idempotency: if any commission rows exist for this payment, assume already processed
     const { data: existing = [], error: exErr } = await supabaseAdmin
       .from('referral_commissions')
       .select('id')
@@ -205,141 +145,19 @@ async function recordReferralCommissionForPayment({ paymentRow, planRow }) {
       return { recorded: false, reason: 'zero_base_amount' };
     }
 
-    // helpers
-    const toISODate = (d) => (new Date(d)).toISOString().slice(0, 10);
-    const computeScheduledDate = (startIso, monthsToAdd) => {
-      try {
-        const d = new Date(startIso + 'T00:00:00Z');
-        d.setUTCMonth(d.getUTCMonth() + monthsToAdd);
-        return d.toISOString().slice(0, 10);
-      } catch {
-        return null;
-      }
-    };
-
-    const results = { inserted: [], scheduled: [], skipped: [], errors: [] };
-
-    // normalize commission_monthly array (always length 10)
-    const normalizePctArr = (arr, len = 10) => {
-      const out = Array.isArray(arr) ? arr.map(v => {
-        if (v === null || v === undefined) return 0;
-        const s = String(v).replace('%', '').replace(',', '').trim();
-        const n = Number(s);
-        return Number.isFinite(n) ? n : 0;
-      }) : [];
-      while (out.length < len) out.push(0);
-      return out.slice(0, len);
-    };
+    const results = { inserted: [], skipped: [], errors: [] };
 
     const monthlyPctArrFull = normalizePctArr(planRow?.commission_monthly, 10);
 
-    // --- INSTANT COMMISSIONS: only for ONE_TIME plans ---
+    // For ONE_TIME plans
     if (String(planRow?.payment_type) === 'one_time') {
       const instantArr = normalizePctArr(planRow?.commission_instant, 10);
-
       for (let level = 1; level <= 10; level++) {
-        try {
-          const pct = Number(instantArr[level - 1] ?? 0);
-          if (!pct || pct <= 0) {
-            results.skipped.push({ type: 'instant', level, reason: 'zero_percentage' });
-            continue;
-          }
-
-          // find referrer at this level
-          const { data: rtRow, error: rtErr } = await supabaseAdmin
-            .from('referral_tree')
-            .select('user_id')
-            .eq('referred_user_id', paymentRow.user_id)
-            .eq('level', level)
-            .limit(1)
-            .maybeSingle();
-
-          if (rtErr) {
-            results.errors.push({ type: 'instant', level, step: 'fetch_referrer', error: rtErr });
-            continue;
-          }
-          const referrerId = rtRow?.user_id ?? null;
-          if (!referrerId) {
-            results.skipped.push({ type: 'instant', level, reason: 'no_referrer' });
-            continue;
-          }
-
-          // compute amount (in rupees, rounded)
-          const amount = Math.round((baseAmount * pct) / 100);
-          if (!amount || amount <= 0) {
-            results.skipped.push({ type: 'instant', level, referrerId, reason: 'computed_zero' });
-            continue;
-          }
-
-          const commRow = {
-            user_id: referrerId,
-            from_user_id: paymentRow.user_id,
-            level,
-            percentage: pct,
-            amount,
-            payment_id: paymentRow.id,
-            scheduled: false,
-            status: 'completed',
-            created_at: new Date().toISOString()
-          };
-
-          const { data: inserted, error: insErr } = await supabaseAdmin
-            .from('referral_commissions')
-            .insert(commRow)
-            .select()
-            .single();
-
-          if (insErr) {
-            results.errors.push({ type: 'instant', level, step: 'insert_commission', error: insErr });
-            continue;
-          }
-
-          // credit wallet (best-effort)
-          try {
-            const { data: existingWallet } = await supabaseAdmin
-              .from('wallets').select('*').eq('user_id', referrerId).maybeSingle();
-
-            const currReferral = Number(existingWallet?.referral_balance ?? 0);
-            const currTotal = Number(existingWallet?.total_balance ?? 0);
-            const currEarnings = Number(existingWallet?.total_commission ?? 0);
-
-            const updatedWallet = {
-              user_id: referrerId,
-              referral_balance: currReferral + amount,
-              total_balance: currTotal + amount,
-              total_commission: currEarnings + amount,
-              updated_at: new Date().toISOString()
-            };
-            if (!existingWallet) updatedWallet.created_at = new Date().toISOString();
-
-            const { data: upserted, error: upErr } = await supabaseAdmin
-              .from('wallets').upsert(updatedWallet, { onConflict: ['user_id'] }).select().maybeSingle();
-
-            if (upErr) {
-              results.errors.push({ type: 'instant', level, step: 'wallet_upsert', error: upErr });
-              results.inserted.push({ level, commission: inserted, wallet: null });
-            } else {
-              results.inserted.push({ level, commission: inserted, wallet: upserted });
-            }
-          } catch (we) {
-            results.errors.push({ type: 'instant', level, step: 'wallet_trycatch', error: we });
-            results.inserted.push({ level, commission: inserted, wallet: null });
-          }
-        } catch (outer) {
-          results.errors.push({ type: 'instant', level, step: 'outer', error: outer });
+        const pct = Number(instantArr[level - 1] ?? 0);
+        if (!pct || pct <= 0) {
+          results.skipped.push({ type: 'instant', level, reason: 'zero_percentage' });
+          continue;
         }
-      } // end instant loop
-    } // end instant only for one_time
-
-    // --- SCHEDULE MONTHLY COMMISSIONS for ONE_TIME plans (top 5 for 24 months) ---
-    if (String(planRow?.payment_type) === 'one_time') {
-      const monthlyPctArrTop5 = monthlyPctArrFull.slice(0, 5);
-      const paymentDateIso = (paymentRow.payment_date || new Date().toISOString()).slice(0, 10);
-      const monthsToSchedule = 24;
-
-      for (let level = 1; level <= 5; level++) {
-        const pct = Number(monthlyPctArrTop5[level - 1] ?? 0);
-        if (!pct || pct <= 0) continue;
 
         const { data: rtRow, error: rtErr } = await supabaseAdmin
           .from('referral_tree')
@@ -348,164 +166,181 @@ async function recordReferralCommissionForPayment({ paymentRow, planRow }) {
           .eq('level', level)
           .limit(1)
           .maybeSingle();
-        if (rtErr || !rtRow?.user_id) {
-          results.skipped.push({ type: 'schedule', level, reason: 'no_referrer_or_error', error: rtErr });
+
+        if (rtErr) {
+          results.errors.push({ type: 'instant', level, step: 'fetch_referrer', error: rtErr });
           continue;
         }
 
-        const referrerId = rtRow.user_id;
-        for (let m = 1; m <= monthsToSchedule; m++) {
-          const scheduledDate = computeScheduledDate(paymentDateIso, m - 1);
-          const amount = Math.round((baseAmount * pct) / 100);
-          if (!amount || amount <= 0) continue;
+        const referrerId = rtRow?.user_id ?? null;
+        if (!referrerId) {
+          results.skipped.push({ type: 'instant', level, reason: 'no_referrer' });
+          continue;
+        }
 
-          // idempotency: avoid duplicate scheduled row
-          const { data: dup = [] } = await supabaseAdmin
-            .from('scheduled_commissions')
-            .select('id')
-            .eq('user_id', referrerId)
-            .eq('from_user_id', paymentRow.user_id)
-            .eq('level', level)
-            .eq('scheduled_month', m)
-            .eq('scheduled_for', scheduledDate)
-            .limit(1);
+        const amount = Math.round((baseAmount * pct) / 100);
+        if (!amount || amount <= 0) {
+          results.skipped.push({ type: 'instant', level, referrerId, reason: 'computed_zero' });
+          continue;
+        }
 
-          if (Array.isArray(dup) && dup.length > 0) continue;
+        const commRow = {
+          user_id: referrerId,
+          from_user_id: paymentRow.user_id,
+          level,
+          percentage: pct,
+          amount,
+          payment_id: paymentRow.id,
+          scheduled: false,
+          status: 'completed',
+          created_at: new Date().toISOString()
+        };
 
-          const schedRow = {
+        const { data: inserted, error: insErr } = await supabaseAdmin
+          .from('referral_commissions')
+          .insert(commRow)
+          .select()
+          .single();
+
+        if (insErr) {
+          results.errors.push({ type: 'instant', level, step: 'insert_commission', error: insErr });
+          continue;
+        }
+
+        // Update the referrer's wallet after inserting commission
+        try {
+          const { data: existingWallet } = await supabaseAdmin
+            .from('wallets').select('*').eq('user_id', referrerId).maybeSingle();
+
+          const currReferral = Number(existingWallet?.referral_balance ?? 0);
+          const currTotal = Number(existingWallet?.total_balance ?? 0);
+          const currEarnings = Number(existingWallet?.total_commission ?? 0);
+
+          const updatedWallet = {
             user_id: referrerId,
-            from_user_id: paymentRow.user_id,
-            plan_id: paymentRow.plan_id ?? planRow?.id ?? null,
-            level,
-            percentage: pct,
-            amount,
-            scheduled_month: m,
-            scheduled_for: scheduledDate,
-            status: 'pending',
-            attempts: 0,
-            created_at: new Date().toISOString()
+            referral_balance: currReferral + amount,
+            total_balance: currTotal + amount,
+            total_commission: currEarnings + amount,
+            updated_at: new Date().toISOString()
           };
 
-          try {
-            await supabaseAdmin.from('scheduled_commissions').insert(schedRow);
-            results.scheduled.push({ level, month: m, referrerId, scheduled_for: scheduledDate });
-          } catch (scErr) {
-            results.errors.push({ type: 'schedule', level, month: m, error: scErr });
+          if (!existingWallet) updatedWallet.created_at = new Date().toISOString();
+
+          const { data: upserted, error: upErr } = await supabaseAdmin
+            .from('wallets').upsert(updatedWallet, { onConflict: ['user_id'] }).select().maybeSingle();
+
+          if (upErr) {
+            results.errors.push({ type: 'instant', level, step: 'wallet_upsert', error: upErr });
+          } else {
+            results.inserted.push({ level, commission: inserted, wallet: upserted });
           }
+        } catch (we) {
+          results.errors.push({ type: 'instant', level, step: 'wallet_trycatch', error: we });
         }
       }
-    } // end one_time scheduling
-
-    // --- RECURRING PLANS: immediate monthly commissions (levels 1..10) for months 1..11 ---
-    if (String(planRow?.payment_type) !== 'one_time') {
-      const monthNumber = Number(paymentRow.month_number ?? 1);
-      if (monthNumber <= 0) {
-        results.skipped.push({ type: 'recurring', reason: 'invalid_month_number', monthNumber });
-      } else if (monthNumber > 11) {
-        results.skipped.push({ type: 'recurring', reason: 'beyond_commission_months', monthNumber });
-      } else {
-        for (let level = 1; level <= 10; level++) {
-          try {
-            const pct = Number(monthlyPctArrFull[level - 1] ?? 0);
-            if (!pct || pct <= 0) {
-              results.skipped.push({ type: 'recurring', level, monthNumber, reason: 'zero_percentage' });
-              continue;
-            }
-
-            const { data: rtRow, error: rtErr } = await supabaseAdmin
-              .from('referral_tree')
-              .select('user_id')
-              .eq('referred_user_id', paymentRow.user_id)
-              .eq('level', level)
-              .limit(1)
-              .maybeSingle();
-
-            if (rtErr) {
-              results.errors.push({ type: 'recurring', level, step: 'fetch_referrer', error: rtErr });
-              continue;
-            }
-            const referrerId = rtRow?.user_id ?? null;
-            if (!referrerId) {
-              results.skipped.push({ type: 'recurring', level, monthNumber, reason: 'no_referrer' });
-              continue;
-            }
-
-            const amount = Math.round((baseAmount * pct) / 100);
-            if (!amount || amount <= 0) {
-              results.skipped.push({ type: 'recurring', level, monthNumber, reason: 'computed_zero' });
-              continue;
-            }
-
-            const commRow = {
-              user_id: referrerId,
-              from_user_id: paymentRow.user_id,
-              level,
-              percentage: pct,
-              amount,
-              payment_id: paymentRow.id,
-              subscription_id: paymentRow.subscription_id ?? null,
-              scheduled: false,
-              status: 'completed',
-              month_number: monthNumber,
-              created_at: new Date().toISOString()
-            };
-
-            const { data: inserted, error: insErr } = await supabaseAdmin
-              .from('referral_commissions')
-              .insert(commRow)
-              .select()
-              .single();
-
-            if (insErr) {
-              results.errors.push({ type: 'recurring', level, monthNumber, step: 'insert_commission', error: insErr });
-              continue;
-            }
-
-            // credit wallet
-            try {
-              const { data: existingWallet } = await supabaseAdmin
-                .from('wallets').select('*').eq('user_id', referrerId).maybeSingle();
-
-              const currReferral = Number(existingWallet?.referral_balance ?? 0);
-              const currTotal = Number(existingWallet?.total_balance ?? 0);
-              const currEarnings = Number(existingWallet?.total_commission ?? 0);
-
-              const updatedWallet = {
-                user_id: referrerId,
-                referral_balance: currReferral + amount,
-                total_balance: currTotal + amount,
-                total_commission: currEarnings + amount,
-                updated_at: new Date().toISOString()
-              };
-              if (!existingWallet) updatedWallet.created_at = new Date().toISOString();
-
-              const { data: upserted, error: upErr } = await supabaseAdmin
-                .from('wallets').upsert(updatedWallet, { onConflict: ['user_id'] }).select().maybeSingle();
-
-              if (upErr) {
-                results.errors.push({ type: 'recurring', level, monthNumber, step: 'wallet_upsert', error: upErr });
-                results.inserted.push({ type: 'recurring', level, monthNumber, commission: inserted, wallet: null });
-              } else {
-                results.inserted.push({ type: 'recurring', level, monthNumber, commission: inserted, wallet: upserted });
-              }
-            } catch (we) {
-              results.errors.push({ type: 'recurring', level, monthNumber, step: 'wallet_trycatch', error: we });
-              results.inserted.push({ type: 'recurring', level, monthNumber, commission: inserted, wallet: null });
-            }
-          } catch (lvlEx) {
-            results.errors.push({ type: 'recurring', level, monthNumber, step: 'outer', error: lvlEx });
-          }
-        } // end recurring levels loop
-      }
-    } // end recurring handling
+    }
 
     return { recorded: true, details: results };
   } catch (err) {
-    console.error('recordReferralCommissionForPayment unexpected', err);
+    console.error('Error in recording referral commission:', err);
     return { recorded: false, reason: 'unexpected', error: err };
   }
 }
 
+// API route to manually trigger commission processing
+app.post('/process-commissions', async (req, res) => {
+  console.log('Process commissions triggered manually at: ', new Date().toISOString());
+
+  try {
+    const { data: rows, error } = await supabaseAdmin
+      .from('scheduled_commissions')
+      .select('*')
+      .in('status', ['pending', 'processing'])  
+      .lte('scheduled_for', new Date().toISOString().slice(0, 10)) 
+      .order('scheduled_for', { ascending: true });
+
+    if (error) {
+      console.error('Error fetching scheduled commissions:', error);
+      return res.status(500).json({ error: 'Failed to fetch scheduled commissions', details: error });
+    }
+
+    if (!rows || rows.length === 0) {
+      console.log('No scheduled commissions found for processing');
+      return res.status(200).json({ message: 'No commissions to process today' });
+    }
+
+    for (const row of rows) {
+      try {
+        const { data: claimed, error: claimError } = await supabaseAdmin
+          .from('scheduled_commissions')
+          .update({ status: 'processing', updated_at: new Date().toISOString() })
+          .eq('id', row.id)
+          .eq('status', 'pending') 
+          .select()
+          .maybeSingle();
+
+        if (claimError) {
+          console.warn('Error while claiming commission for row ID:', row.id, claimError);
+          continue;
+        }
+
+        if (!claimed) {
+          console.log('Row already claimed by another process:', row.id);
+          continue;
+        }
+
+        const { data: processResult, error: processError } = await supabaseAdmin.rpc('process_scheduled_commission', {
+          p_sched_id: row.id
+        });
+
+        if (processError) {
+          console.error('Error processing commission for row ID:', row.id, processError);
+          await supabaseAdmin
+            .from('scheduled_commissions')
+            .update({ status: 'failed', attempts: (row.attempts || 0) + 1, last_error: processError.message, updated_at: new Date().toISOString() })
+            .eq('id', row.id);
+        } else {
+          console.log('Commission processed successfully for row ID:', row.id, processResult);
+          await supabaseAdmin
+            .from('scheduled_commissions')
+            .update({ status: 'completed', updated_at: new Date().toISOString() })
+            .eq('id', row.id);
+
+          // Credit wallet and record referral commission
+          await creditWalletForPayment({ user_id: row.user_id, amount: row.amount });
+          if (row.from_user_id) {
+            const paymentRow = { amount: row.amount, user_id: row.user_id, id: row.id };
+            await recordReferralCommissionForPayment({ paymentRow, planRow: {} });
+          }
+        }
+      } catch (err) {
+        console.error('Error processing row ID:', row.id, err);
+        await supabaseAdmin
+          .from('scheduled_commissions')
+          .update({ status: 'failed', attempts: (row.attempts || 0) + 1, last_error: err.message, updated_at: new Date().toISOString() })
+          .eq('id', row.id);
+      }
+    }
+
+    return res.status(200).json({ message: 'Commissions processed successfully' });
+  } catch (err) {
+    console.error('Error triggering commission processing:', err);
+    return res.status(500).json({ error: 'An error occurred while processing commissions', details: err.message });
+  }
+});
+
+
+
+// Schedule a cron job to run daily at midnight
+cron.schedule('05 13 * * *', async () => {
+  console.log('Cron job triggered at: ', new Date().toISOString());
+  try {
+    const response = await axios.post('http://localhost:3001/process-commissions');
+    console.log('Cron job executed successfully:', response.data);
+  } catch (error) {
+    console.error('Error executing cron job:', error);
+  }
+});
 
 
 app.post('/test/commission', async (req, res) => {
@@ -768,7 +603,6 @@ app.post('/api/register', async (req, res) => {
       await supabaseAdmin.from('wallets').insert({
         user_id,
         total_balance: 0,
-        saving_balance: 0,
         referral_balance: 0,
         total_commission: 0,
         total_withdrawn: 0,
@@ -2471,7 +2305,7 @@ app.get('/api/wallet/:userId', async (req, res) => {
 
     // Build payload
     const payload = {
-      balance: account && account.length > 0 ? Number(account[0].wallet_balance || 0) : Number(walletRow?.total_balance || walletRow?.saving_balance || 0),
+      balance: account && account.length > 0 ? Number(account[0].wallet_balance || 0) : Number(walletRow?.total_balance || 0),
       totalEarnings: Number(walletRow?.total_commission || 0),
       totalWithdrawn: Number(walletRow?.total_withdrawn || 0),
       autoWithdrawEnabled: Boolean(walletRow?.auto_withdraw_enabled),
@@ -2705,7 +2539,6 @@ app.post('/api/create-wallet', async (req, res) => {
     const payload = {
       user_id,
       total_balance: 0,
-      saving_balance: 0,
       referral_balance: 0,
       total_commission: 0,
       total_withdrawn: 0,
