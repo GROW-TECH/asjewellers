@@ -332,7 +332,7 @@ app.post('/process-commissions', async (req, res) => {
 
 
 // Schedule a cron job to run daily at midnight
-cron.schedule('05 13 * * *', async () => {
+cron.schedule('0 0 * * *', async () => {
   console.log('Cron job triggered at: ', new Date().toISOString());
   try {
     const response = await axios.post('http://localhost:3001/process-commissions');
