@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "A S JEWELLERS",
+    "slug": "as-jewellers-mlm",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "myapp",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true
+    },
+      "android": {
+      "package": "com.grow.asjewellersmlm"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "extra": {
+      "SERVER_URL": "https://asjewellers.onrender.com",
+      "router": {},
+      "eas": {
+        "projectId": "cee883ba-0993-4941-a673-0ca08327786e"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser",
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

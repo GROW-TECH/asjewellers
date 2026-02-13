@@ -1,0 +1,1 @@
+{"serveCommand":"npx http-server admin-dist -p 8000 -o","staticDir":"admin-dist","projectType":"static"}
